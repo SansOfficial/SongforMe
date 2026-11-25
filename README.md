@@ -102,3 +102,7 @@ nonisolated struct MySource: MusicSource {
 | `apple/Mac/Immersive/` | 全屏氛围模式 |
 
 `apple/Kit` 和界面无关，以后的 iPhone 版直接共用；Windows 版照它和它的测试用原生技术重写。
+
+## 许可证
+
+[MIT](LICENSE)
