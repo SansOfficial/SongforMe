@@ -98,7 +98,7 @@ struct RecoPage: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        let seeded = !app.likedMids.isEmpty
+        let seeded = !app.likedMids.isEmpty && !app.hub.all.isEmpty
         PageHead(title: "为你推荐", covers: covers(of: app.batch.map(\.song))) {
             if seeded {
                 if !app.batch.isEmpty { PlayButton { app.playBatch() } }
@@ -293,10 +293,15 @@ struct Card: View {
 
 /// 应用本身不带音源，一个都没接的时候说明一下
 private struct NoSource: View {
+    @Environment(AppModel.self) private var app
     var body: some View {
         VStack(spacing: 14) {
             Text("还没有音源").font(.title3.bold())
-            Text("SongforMe 本身不带音源。按说明文档接入一个，就能在这里听歌了。").foregroundStyle(.secondary)
+            Text("SongforMe 本身不带音源。添加一个音源文件，就能在这里听歌了。").foregroundStyle(.secondary)
+            Button("添加音源…") { app.chooseSource() }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .tint(Theme.accent)
         }
         .frame(maxWidth: .infinity)
     }

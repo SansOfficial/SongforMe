@@ -95,8 +95,18 @@ final class AppModel {
 
     let player: Player
     let lyrics: LyricsModel
-    let hub: SourceHub
+    /// 有哪些音源。界面从这里读，增减之后会跟着刷新
+    var hub: SourceHub {
+        _ = sourceChanges
+        return sources
+    }
+    private var sourceChanges = 0
+    /// 正在填账号的音源，有值时弹出填写的窗口
+    var settingUp: SourceSetup?
 
+    @ObservationIgnored private let sources: SourceHub
+    /// 添加过的音源文件
+    @ObservationIgnored let shelf = ScriptShelf(folder: AppModel.folder.appending(path: "sources", directoryHint: .isDirectory))
     @ObservationIgnored private let store: Store
     @ObservationIgnored private let library: Library
     @ObservationIgnored private let nowPlaying: NowPlaying
@@ -114,7 +124,7 @@ final class AppModel {
         let hub = SourcePack.installed()
         SourceHub.current = hub
         let store = Self.openStore()
-        self.hub = hub
+        sources = hub
         self.store = store
         library = Library(hub: hub, store: store)
         player = Player(
@@ -184,10 +194,15 @@ final class AppModel {
         player.restore(await read("playback") ?? PlaybackPrefs())
         if let saved: SavedBatch = await read("lastBatch") { batch = saved.items }
         searchSource = await read("searchSource") ?? ""
+        let found = await shelf.load()
+        for s in found.sources where sources.named(s.info.id) == nil { sources.add(s) }
+        sourceChanges += 1
+        dropOrphans()
         for source in hub.all { await source.prepare(store) }
         await refreshLibrary()
         await refreshAccounts()
         ready = true
+        if let bad = found.failed.first { say("有音源文件没有载入，\(bad)", error: true) }
     }
 
     private nonisolated struct SavedBatch: Codable { var items: [Recommendation] }
@@ -292,7 +307,16 @@ final class AppModel {
     }
 
     func login(_ source: any MusicSource) async {
+        if let script = source as? ScriptSource {
+            settingUp = SourceSetup(source: script)
+            return
+        }
         await source.login()
+        await entered(source)
+    }
+
+    /// 登录之后：取昵称、同步曲库，第一次还顺便生成一批推荐
+    func entered(_ source: any MusicSource) async {
         await refreshAccount(source)
         guard loggedIn(source) else { return }
         let first = likedMids.isEmpty
@@ -302,10 +326,34 @@ final class AppModel {
 
     func logout(_ source: any MusicSource) async {
         await source.logout()
+        if let script = source as? ScriptSource { try? shelf.save(script) }
         try? await store.remove("account:\(source.info.id)")
         await refreshAccount(source)
         say("已退出\(source.info.spaced)，本地的曲库和听歌记录仍然保留")
     }
+
+    func install(_ source: any MusicSource) async {
+        sources.add(source)
+        sourceChanges += 1
+        await source.prepare(store)
+        await refreshLibrary()
+        await refreshAccount(source)
+    }
+
+    func uninstall(_ source: any MusicSource) async {
+        let id = source.info.id
+        sources.remove(id)
+        accounts[id] = nil
+        profiles[id] = nil
+        try? await store.remove("account:\(id)")
+        sourceChanges += 1
+        dropOrphans()
+        await refreshLibrary()
+        if !ready || page != .reco { go(.reco) }
+    }
+
+    /// 音源不在了的歌从这批推荐里去掉
+    private func dropOrphans() { batch.removeAll { sources.owner(of: $0.song) == nil } }
 
     func sync() async {
         guard loggedIn else { return say("请先登录", error: true) }

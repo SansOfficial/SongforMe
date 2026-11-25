@@ -17,12 +17,15 @@ targets:
       path: Mac/Info.plist
       properties:
         CFBundleDisplayName: SongforMe
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.1"
+        CFBundleVersion: "2"
         CFBundleDevelopmentRegion: zh-Hans
         LSApplicationCategoryType: public.app-category.music
         LSMinimumSystemVersion: "26.0"
         NSHumanReadableCopyright: ""
+        # 音源可以连用户自己填的、局域网里的服务器
+        NSAppTransportSecurity: { NSAllowsLocalNetworking: true }
+        NSLocalNetworkUsageDescription: 连接你填写的音乐服务器
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sansofficial.songforme

@@ -155,10 +155,10 @@ public struct Library: Sendable {
             now: now
         )
         // 一个都没登录时不挑，先让人看到推荐
-        if !active.isEmpty {
-            for source in hub.all where !source.hasAccount { active.insert(source.info.id) }
-            input.playable = { hub.owner(of: $0).map { active.contains($0.info.id) } ?? false }
-        }
+        var open = active
+        for source in hub.all where active.isEmpty || !source.hasAccount { open.insert(source.info.id) }
+        // 音源已经移除的歌放不了
+        if !open.isEmpty { input.playable = { [open] in hub.owner(of: $0).map { open.contains($0.info.id) } ?? false } }
         return input
     }
 

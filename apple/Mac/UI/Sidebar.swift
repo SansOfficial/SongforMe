@@ -115,16 +115,25 @@ private struct Avatar: View {
 struct AccountPanel: View {
     let close: () -> Void
     @Environment(AppModel.self) private var app
-    @State private var showingSeeds = false
+    /// 打开了哪个二级页面
+    private enum Sub { case seeds, sources }
+    @State private var sub: Sub?
     @State private var appearance = Appearance.current
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if showingSeeds { seeds } else { main }
+            switch sub {
+            case .seeds: seeds
+            case .sources: sources
+            case nil: main
+            }
         }
         .padding(10)
         .frame(width: 250)
-        .animation(.snappy(duration: 0.22), value: showingSeeds)
+        .animation(.snappy(duration: 0.22), value: sub)
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .debugPanel)) { if $0.object as? String == "sources" { sub = .sources } }
+        #endif
     }
 
     @ViewBuilder private var main: some View {
@@ -134,12 +143,21 @@ struct AccountPanel: View {
         if !app.signedOut.isEmpty { Divider().padding(.vertical, 4) }
         row("听歌报告", "chart.bar") { app.openReport() }
         row("算法调校", "slider.horizontal.3") { app.go(.tuning) }
-        Button { showingSeeds = true } label: {
+        Button { sub = .seeds } label: {
             HStack {
                 Label("口味种子歌单", systemImage: "leaf")
                 Spacer()
                 let n = app.playlists.count { $0.kind == .imported }
                 if n > 0 { Text("\(n)").foregroundStyle(.tertiary) }
+                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(MenuRowStyle())
+        Button { sub = .sources } label: {
+            HStack {
+                Label("音源", systemImage: "music.note.house")
+                Spacer()
+                if !app.hub.all.isEmpty { Text("\(app.hub.all.count)").foregroundStyle(.tertiary) }
                 Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
             }
         }
@@ -173,12 +191,41 @@ struct AccountPanel: View {
         .buttonStyle(MenuRowStyle())
     }
 
+    // 二级页面：音源文件的添加和移除
+    @ViewBuilder private var sources: some View {
+        Button { sub = nil } label: { Label("音源", systemImage: "chevron.left").font(.headline) }
+            .buttonStyle(MenuRowStyle())
+        ForEach(app.hub.all, id: \.info.id) { source in
+            HStack(spacing: 0) {
+                Text(source.info.name).lineLimit(1)
+                Spacer(minLength: 6)
+                if let script = source as? ScriptSource {
+                    if script.hasAccount {
+                        IconButton(icon: "gearshape", label: "设置\(source.info.spaced)", size: 11) {
+                            close()
+                            app.settingUp = SourceSetup(source: script)
+                        }
+                    }
+                    IconButton(icon: "xmark", label: "移除\(source.info.spaced)", size: 11) {
+                        close()
+                        app.askRemove(script)
+                    }
+                } else {
+                    Text("自带").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+            .frame(minHeight: 28)
+            .padding(.horizontal, 8)
+        }
+        row("添加音源…", "plus") { app.chooseSource() }
+    }
+
     // 二级页面：导入公开歌单当口味种子，查看、移除已导入的
     @State private var link = ""
 
     @ViewBuilder private var seeds: some View {
         let list = app.playlists.filter { $0.kind == .imported }
-        Button { showingSeeds = false } label: { Label("口味种子歌单", systemImage: "chevron.left").font(.headline) }
+        Button { sub = nil } label: { Label("口味种子歌单", systemImage: "chevron.left").font(.headline) }
             .buttonStyle(MenuRowStyle())
         Text("导入的歌会计入你的口味。").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
         HStack {

@@ -30,6 +30,7 @@ struct RootView: View {
         }
         .tint(Theme.accent)
         .frame(minWidth: 860, minHeight: 560)
+        .sheet(item: $app.settingUp) { SourceForm(source: $0.source) }
         .task { await app.start() }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearch)) { _ in searching = true }
     }

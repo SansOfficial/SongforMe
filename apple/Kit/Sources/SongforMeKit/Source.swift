@@ -1,8 +1,8 @@
 import Foundation
 import Synchronization
 
-// 音源：歌从哪里来。应用本身不带任何音源，编译时把音源的代码放进 local/sources 就会被带上
-// （写法见 README 的“接入音源”）。
+// 音源：歌从哪里来。应用本身不带任何音源，可以在应用里添加音源文件（见 ScriptSource），
+// 也可以编译时把音源的代码放进 local/sources（写法见 README 的“接入音源”）。
 
 public struct SourceInfo: Hashable, Sendable {
     /// 音源的短名字，歌曲、歌手、专辑、歌单的编号都以“短名字:”开头
@@ -148,11 +148,22 @@ extension MusicSource {
     @MainActor public func perform(_ action: AccountAction) async throws { throw SourceError("\(info.name)不支持这个操作") }
 }
 
-/// 装了哪些音源
-public struct SourceHub: Sendable {
-    public let all: [any MusicSource]
+/// 装了哪些音源。添加、移除之后，拿着它的地方马上就能看到
+public final class SourceHub: Sendable {
+    private let list: Mutex<[any MusicSource]>
 
-    public init(_ all: [any MusicSource] = []) { self.all = all }
+    public init(_ all: [any MusicSource] = []) { list = Mutex(all) }
+
+    public var all: [any MusicSource] { list.withLock { $0 } }
+
+    /// 已经有同一个短名字的就换掉
+    public func add(_ source: any MusicSource) {
+        list.withLock { all in
+            if let i = all.firstIndex(where: { $0.info.id == source.info.id }) { all[i] = source } else { all.append(source) }
+        }
+    }
+
+    public func remove(_ id: String) { list.withLock { $0.removeAll { $0.info.id == id } } }
 
     /// 一个编号（歌、歌手、专辑、歌单都可以）属于哪个音源；那个音源没有装时为 nil
     public func owner(of id: String) -> (any MusicSource)? {

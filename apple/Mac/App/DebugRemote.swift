@@ -37,7 +37,7 @@ enum DebugRemote {
             let scroll = views.joined().compactMap { $0 as? NSScrollView }.max { $0.frame.width < $1.frame.width }
             scroll?.contentView.scroll(to: NSPoint(x: 0, y: Double(arg) ?? 0))
         case "snap-sheet": shoot(NSApp.windows.first { $0.sheetParent != nil }, arg)
-        case "panel": NotificationCenter.default.post(name: .debugPanel, object: nil)
+        case "panel": NotificationCenter.default.post(name: .debugPanel, object: arg)
         case "snap-popover": shoot(NSApp.windows.first { $0.className.contains("Popover") }, arg)
         case "poster": NotificationCenter.default.post(name: .debugPoster, object: arg)
         case "playlist": app.go(.playlist(arg))
@@ -51,6 +51,21 @@ enum DebugRemote {
         case "album": if let s = app.content.songs.first { app.openAlbum(of: s) }
         case "like": if let s = app.content.songs.first { app.toggleLike(s) }
         case "seed": Task { await app.importSeed(arg) }
+        case "add-source": Task { await app.addSource(URL(filePath: arg), confirm: false) }
+        case "choose-source": app.chooseSource()
+        case "ask-add": Task { await app.addSource(URL(filePath: arg)) }
+        case "ask-remove": if let s = app.scripts.first { app.askRemove(s) }
+        // 点弹窗里写着这几个字的按钮
+        case "click":
+            func buttons(_ v: NSView) -> [NSButton] { ((v as? NSButton).map { [$0] } ?? []) + v.subviews.flatMap(buttons) }
+            NSApp.windows.lazy.filter { $0.sheetParent != nil }.compactMap(\.contentView).flatMap(buttons).first { $0.title == arg }?.performClick(nil)
+        case "remove-source": if let s = app.scripts.first { Task { await app.removeSource(s) } }
+        // fill-source 键=值 键=值
+        case "fill-source":
+            if let s = app.scripts.first {
+                let pairs = arg.split(separator: " ").map { $0.split(separator: "=", maxSplits: 1).map(String.init) }.filter { $0.count == 2 }
+                Task { if let e = await app.saveSettings(s, Dictionary(pairs.map { ($0[0], $0[1]) }, uniquingKeysWith: { $1 })) { app.say(e, error: true) } }
+            }
         case "generate": Task { await app.generate() }
         case "play": app.playList()
         case "toggle": app.togglePlay()
