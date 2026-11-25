@@ -39,7 +39,7 @@ private func source(_ body: String, patience: Double = 10) async throws -> Scrip
     try await ScriptSource(script: "source({ \(base) search() { return [] }, stream() { return null }, \(body) })", patience: patience)
 }
 
-@Suite("音源文件")
+@Suite("插件")
 struct ScriptTests {
     @Test("写法不对的说明哪里不对", arguments: [
         ("", "没有调用 source"),
@@ -196,7 +196,7 @@ struct ScriptTests {
         #expect(e?.message == "8true")
     }
 
-    @Test("音源文件和设置存到文件夹里，再打开还在；移除后什么都不留")
+    @Test("插件和设置存到文件夹里，再打开还在；移除后什么都不留")
     func shelf() async throws {
         let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

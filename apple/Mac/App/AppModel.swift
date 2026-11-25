@@ -103,9 +103,11 @@ final class AppModel {
     private var sourceChanges = 0
     /// 正在填账号的音源，有值时弹出填写的窗口
     var settingUp: SourceSetup?
+    /// 正在添加插件
+    var adding = false
 
     @ObservationIgnored private let sources: SourceHub
-    /// 添加过的音源文件
+    /// 添加过的插件
     @ObservationIgnored let shelf = ScriptShelf(folder: AppModel.folder.appending(path: "sources", directoryHint: .isDirectory))
     @ObservationIgnored private let store: Store
     @ObservationIgnored private let library: Library
@@ -195,14 +197,17 @@ final class AppModel {
         if let saved: SavedBatch = await read("lastBatch") { batch = saved.items }
         searchSource = await read("searchSource") ?? ""
         let found = await shelf.load()
-        for s in found.sources where sources.named(s.info.id) == nil { sources.add(s) }
+        for s in found.sources where sources.named(s.info.id) == nil {
+            attach(s)
+            sources.add(s)
+        }
         sourceChanges += 1
         dropOrphans()
         for source in hub.all { await source.prepare(store) }
         await refreshLibrary()
         await refreshAccounts()
         ready = true
-        if let bad = found.failed.first { say("有音源文件没有载入，\(bad)", error: true) }
+        if let bad = found.failed.first { say("有插件没有载入，\(bad)", error: true) }
     }
 
     private nonisolated struct SavedBatch: Codable { var items: [Recommendation] }
@@ -307,7 +312,7 @@ final class AppModel {
     }
 
     func login(_ source: any MusicSource) async {
-        if let script = source as? ScriptSource {
+        if let script = source as? ScriptSource, !script.fields.isEmpty, !script.filled || script.site == nil {
             settingUp = SourceSetup(source: script)
             return
         }

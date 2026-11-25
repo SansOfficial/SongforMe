@@ -191,7 +191,7 @@ struct AccountPanel: View {
         .buttonStyle(MenuRowStyle())
     }
 
-    // 二级页面：音源文件的添加和移除
+    // 二级页面：音源插件的添加和移除
     @ViewBuilder private var sources: some View {
         Button { sub = nil } label: { Label("音源", systemImage: "chevron.left").font(.headline) }
             .buttonStyle(MenuRowStyle())
@@ -200,7 +200,7 @@ struct AccountPanel: View {
                 Text(source.info.name).lineLimit(1)
                 Spacer(minLength: 6)
                 if let script = source as? ScriptSource {
-                    if script.hasAccount {
+                    if !script.fields.isEmpty {
                         IconButton(icon: "gearshape", label: "设置\(source.info.spaced)", size: 11) {
                             close()
                             app.settingUp = SourceSetup(source: script)
@@ -217,7 +217,7 @@ struct AccountPanel: View {
             .frame(minHeight: 28)
             .padding(.horizontal, 8)
         }
-        row("添加音源…", "plus") { app.chooseSource() }
+        row("添加插件…", "plus") { app.adding = true }
     }
 
     // 二级页面：导入公开歌单当口味种子，查看、移除已导入的

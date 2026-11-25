@@ -297,8 +297,8 @@ private struct NoSource: View {
     var body: some View {
         VStack(spacing: 14) {
             Text("还没有音源").font(.title3.bold())
-            Text("SongforMe 本身不带音源。添加一个音源文件，就能在这里听歌了。").foregroundStyle(.secondary)
-            Button("添加音源…") { app.chooseSource() }
+            Text("SongforMe 本身不带音源。添加一个社区插件，就能在这里听歌了。").foregroundStyle(.secondary)
+            Button("添加插件…") { app.adding = true }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
                 .tint(Theme.accent)

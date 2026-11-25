@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-/// 用 JavaScript 写的音源，应用装好之后也能添加。写法见 README 的“接入音源”
+/// 用 JavaScript 写的音源，应用装好之后也能添加。写法见 README 的“插件”
 public final class ScriptSource: MusicSource {
     /// 要用户填的一项，比如服务器地址、用户名、密码
     public struct Field: Decodable, Hashable, Sendable, Identifiable {
@@ -29,6 +29,7 @@ public final class ScriptSource: MusicSource {
         var version: String?
         var hosts: [String]?
         var settings: [Field]?
+        var login: ScriptLogin.Manifest?
         /// 认歌单链接的正则，第一个括号里是歌单的编号
         var playlistLink: String?
         var searchNeedsLogin: Bool?
@@ -39,13 +40,16 @@ public final class ScriptSource: MusicSource {
     public let version: String
     public let hosts: [String]
     public let fields: [Field]
+    /// 要打开网页登录的才有
+    public let site: ScriptLogin?
     public let searchNeedsLogin: Bool
     public let abilities: SourceAbilities
-    public var hasAccount: Bool { !fields.isEmpty }
+    public var hasAccount: Bool { !fields.isEmpty || site != nil }
 
     private let methods: Set<String>
     private let playlistLink: String?
     private let runner: ScriptRunner
+    private let jar = Mutex<(any ScriptJar)?>(nil)
     private let values = Mutex<[String: String]>([:])
     /// 歌手头像，从接口返回的内容里顺手记下的
     private let avatars = Mutex<[String: String]>([:])
@@ -56,7 +60,7 @@ public final class ScriptSource: MusicSource {
         runner = ScriptRunner(patience: patience)
         let json = try await runner.load(script, within: min(patience, 5))
         let m: Manifest
-        do { m = try JSONDecoder().decode(Manifest.self, from: Data(json.utf8)) } catch { throw SourceError("音源文件缺少 id、name，或者写法不对") }
+        do { m = try JSONDecoder().decode(Manifest.self, from: Data(json.utf8)) } catch { throw SourceError("插件缺少 id、name，或者写法不对") }
         guard m.id.wholeMatch(of: /[a-z][a-z0-9]{1,19}/) != nil else { throw SourceError("音源的 id 只能用小写字母和数字，2 到 20 个，字母开头") }
         let name = m.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 30 else { throw SourceError("音源的名字要在 30 个字以内") }
@@ -67,6 +71,7 @@ public final class ScriptSource: MusicSource {
         version = m.version ?? ""
         self.hosts = hosts
         fields = m.settings ?? []
+        site = try m.login.map(ScriptLogin.init)
         searchNeedsLogin = m.searchNeedsLogin ?? false
         methods = Set(m.methods)
         playlistLink = m.playlistLink
@@ -74,7 +79,7 @@ public final class ScriptSource: MusicSource {
         if methods.contains("setLiked") { can.insert(.like) }
         if methods.isSuperset(of: ["addToPlaylist", "createPlaylist", "deletePlaylist"]) { can.insert(.playlists) }
         abilities = can
-        runner.hosts = ScriptHosts(declared: hosts)
+        runner.hosts = ScriptHosts(declared: hosts + (site?.hosts ?? []))
     }
 
     // MARK: 设置
@@ -97,18 +102,52 @@ public final class ScriptSource: MusicSource {
             if !v.isEmpty { clean[f.key] = v }
         }
         values.withLock { $0 = clean }
-        runner.hosts = ScriptHosts(declared: hosts, servers: servers)
+        runner.hosts = ScriptHosts(declared: hosts + (site?.hosts ?? []), servers: servers)
         runner.set(settings: ScriptRunner.json(clean))
     }
 
-    public func account() async -> SourceAccount {
+    /// 该填的都填了
+    public var filled: Bool {
         let v = settings
-        let filled = !fields.isEmpty && fields.allSatisfy { $0.optional || v[$0.key] != nil }
-        let shown = fields.first { $0.kind == .text }.flatMap { v[$0.key] }
-        return SourceAccount(loggedIn: filled, uid: filled ? shown ?? "" : "")
+        return fields.allSatisfy { $0.optional || v[$0.key] != nil }
     }
 
-    @MainActor public func logout() async { try? apply([:]) }
+    public func account() async -> SourceAccount {
+        guard hasAccount else { return SourceAccount() }
+        let filled = filled
+        var uid = fields.first { $0.kind == .text }.flatMap { settings[$0.key] } ?? ""
+        if let site {
+            let cookies = await jar.withLock { $0 }?.cookies() ?? []
+            let values = site.values(cookies)
+            let signedIn = site.signedIn(values)
+            runner.set(signedIn: signedIn)
+            guard signedIn, filled else { return SourceAccount() }
+            let account = site.account(values)
+            if !account.isEmpty { uid = account }
+        }
+        return SourceAccount(loggedIn: filled, uid: filled ? uid : "")
+    }
+
+    // MARK: 网页登录
+
+    /// 交给它存登录状态的地方
+    public func use(_ jar: any ScriptJar) {
+        guard let site else { return }
+        self.jar.withLock { $0 = jar }
+        runner.use(jar, for: site)
+    }
+
+    /// 打开登录网页。要填的还没填完时不算登录
+    @MainActor public func login() async {
+        guard let jar = jar.withLock({ $0 }), await !account().loggedIn else { return }
+        await jar.login { await self.account().loggedIn }
+    }
+
+    @MainActor public func logout() async {
+        try? apply([:])
+        await jar.withLock { $0 }?.logout()
+        _ = await account()
+    }
 
     /// 有 profile 时顺便检查设置对不对
     public func profile() async throws -> AccountProfile {
@@ -317,7 +356,7 @@ public final class ScriptSource: MusicSource {
     }
 }
 
-/// 添加过的音源文件放在哪里：<文件夹>/<id>.js，用户填的设置在 <id>.json（只有本人能读）
+/// 添加过的插件放在哪里：<文件夹>/<id>.js，用户填的设置在 <id>.json（只有本人能读）
 public struct ScriptShelf: Sendable {
     public let folder: URL
     public init(folder: URL) { self.folder = folder }

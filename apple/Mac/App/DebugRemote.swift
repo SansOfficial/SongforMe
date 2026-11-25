@@ -53,12 +53,25 @@ enum DebugRemote {
         case "seed": Task { await app.importSeed(arg) }
         case "add-source": Task { await app.addSource(URL(filePath: arg), confirm: false) }
         case "choose-source": app.chooseSource()
+        case "adding": app.adding = true
+        case "ask-link":
+            Task {
+                guard let url = ScriptDownload.address(of: arg) else { return app.say("链接不对", error: true) }
+                do { await app.addSource(script: try await ScriptDownload.text(of: url), from: url.host()) } catch { app.say(error.localizedDescription, error: true) }
+            }
         case "ask-add": Task { await app.addSource(URL(filePath: arg)) }
         case "ask-remove": if let s = app.scripts.first { app.askRemove(s) }
         // 点弹窗里写着这几个字的按钮
         case "click":
             func buttons(_ v: NSView) -> [NSButton] { ((v as? NSButton).map { [$0] } ?? []) + v.subviews.flatMap(buttons) }
             NSApp.windows.lazy.filter { $0.sheetParent != nil }.compactMap(\.contentView).flatMap(buttons).first { $0.title == arg }?.performClick(nil)
+        // 在弹出的表单里填字、按回车
+        case "type":
+            func fields(_ v: NSView) -> [NSTextField] { ((v as? NSTextField).map { $0.isEditable ? [$0] : [] } ?? []) + v.subviews.flatMap(fields) }
+            guard let sheet = NSApp.windows.first(where: { $0.sheetParent != nil }), let field = sheet.contentView.flatMap({ fields($0).first }) else { break }
+            sheet.makeFirstResponder(field)
+            field.currentEditor()?.insertText(arg)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { field.currentEditor()?.insertNewline(nil) }
         case "remove-source": if let s = app.scripts.first { Task { await app.removeSource(s) } }
         // fill-source 键=值 键=值
         case "fill-source":

@@ -2,7 +2,7 @@
 
 Mac 上的音乐播放器：听歌、自己定的推荐算法、歌词、听歌报告。原生 Swift（SwiftUI + AppKit），macOS 26 起。
 
-**它不带任何音源。** 歌从哪里来由你自己接：在应用里添加一个音源文件就行，写法见下面的“接入音源”。没有音源时应用可以正常打开，只是没有歌。
+**它不带任何音源。** 歌从哪里来由你自己接：在应用里添加一个社区插件，或者自己写一个，见下面的“插件”。没有插件时应用可以正常打开，只是没有歌。
 
 所有数据（曲库、听歌记录、设置）只保存在本机：`~/Library/Application Support/SongforMe/library.sqlite`。
 
@@ -28,9 +28,13 @@ open build/Build/Products/Release/SongforMe.app
 - **多个音源**：接了几个就分组显示几个。同一位歌手在不同音源里算同一个人，推荐和报告合在一起算。
 - **快捷键**：空格播放 / 暂停，⌘← ⌘→ 上一首 / 下一首，⌘↑ ⌘↓ 音量，⌘F 搜索，⌘L 喜欢，F 全屏。
 
-## 接入音源
+## 插件
 
-有两种写法。一般用音源文件：一个 JavaScript 文件，在应用左下角的“音源 → 添加音源…”里选它，不用重新编译。
+一个插件就是一个 JavaScript 文件，负责从某个地方搜歌、放歌。在应用左下角的“音源 → 添加插件…”里粘贴它的链接（https，GitHub 的文件页面也行）或者选本机的文件，不用重新编译。添加前会列出它要连哪些地方、登录哪个网站。
+
+本仓库不包含任何插件，插件由各自的作者编写和维护，和本项目无关。在 GitHub 上搜话题 [songforme-plugin](https://github.com/topics/songforme-plugin) 能找到一些，自己写的也可以加上这个话题。插件是别人写的程序，只添加你信任的。
+
+### 写一个插件
 
 ```js
 // my.js：接自己的音乐服务器
@@ -77,16 +81,39 @@ source({
 | `addToPlaylist(song, id)`、`createPlaylist(name, song)`、`deletePlaylist(id)` | 三个都写了才能编辑账号里的歌单 |
 
 - 歌曲：`{ id, name, artists, album, duration, cover, date, language, vip, extra }`，只有 `id` 和 `name` 必填。`artists` 的每一项是名字或 `{ id, name, avatar }`，`album` 是名字或 `{ id, name }`，`duration` 是秒，`language` 写“国语”“英语”这样的名字，`extra` 是你自己要用的一段文字。歌手是 `{ id, name, avatar, songCount, albumCount }`，专辑是 `{ id, name, artists, cover, date }`。
-- 能用的东西：`fetch`（返回 `status`、`ok`、`headers`、`text()`、`json()`，不带 cookie）、`settings`、`sleep(毫秒)`、`btoa`、`atob`、`console.log`。
+- 能用的东西：`fetch`（返回 `status`、`ok`、`headers`、`text()`、`json()`）、`settings`、`login`（见下）、`sleep(毫秒)`、`btoa`、`atob`、`console.log`。
 - **只能连声明过的主机**：在 `hosts: ["example.com"]` 里写域名（包含子域名，只许 https），用户填的 `kind: "server"` 的地址会自动算上（局域网可以用 http）。接口、播放地址和图片都受这个限制。
 - 脚本在隔离的环境里运行，碰不到文件和应用里的其他东西；连续执行超过 5 秒会被中断。
 - 出错时 `throw new Error("原因")`；需要重新登录时 `throw { message, needsLogin: true }`。
 
-音源文件和填过的设置存在 `~/Library/Application Support/SongforMe/sources/`，设置文件只有你自己能读，但没有加密。音源是别人写的程序，只添加你信任的。
+插件和填过的设置存在 `~/Library/Application Support/SongforMe/sources/`，设置文件只有你自己能读，但没有加密。
+
+### 网页登录
+
+要登录某个网站才能用时，声明 `login`，应用会打开官方网页让用户自己登录：
+
+```js
+source({
+  // …
+  hosts: ["api.example.com"],
+  login: {
+    url: "https://www.example.com/",    // 登录网页
+    hosts: ["api.example.com"],         // 登录状态只发给这些域名（不含子域名），要和登录网页同一个网站，不写就是登录网页的域名
+    cookies: ["session"],               // 有其中任何一个就算登录了
+    uid: ["user_id"],                   // 账号编号在哪个 cookie 里，可以不写
+  },
+});
+```
+
+- 发往 `login.hosts` 的请求由应用带上登录状态，**脚本读不到 cookie**，响应里的 `Set-Cookie` 也会去掉。
+- `login.signedIn`：有没有登录。
+- 接口要求把账号编号、防伪值写进请求时，用占位符，应用发往 `login.hosts` 时才换成真的：`login.cookie(名字…)` 原样，`login.digits(名字…)` 只取数字，`login.number(名字…)` 同前但在 JSON 里写成数字，`login.hash(名字…)` 是 5381 哈希。写几个名字就取第一个有的。
+- 写了 `profile()` 会显示账号的名字和头像；退出登录或移除插件时，登录状态一起删除。
+- 脚本虽然读不到 cookie，登录后却**能以你的身份访问 `login.hosts`**，所以更要只添加信任的插件。
 
 ### 用 Swift 写
 
-要用到 JavaScript 里没有的能力（比如打开网页登录）时，可以用 Swift 实现 `MusicSource`，放在仓库根目录的 `local/sources/`（不进 git），编译时自动带上：
+要用到 JavaScript 里没有的能力时，可以用 Swift 实现 `MusicSource`，放在仓库根目录的 `local/sources/`（不进 git），编译时自动带上：
 
 ```swift
 // local/sources/MySource.swift
@@ -119,9 +146,9 @@ nonisolated struct MySource: MusicSource {
 }
 ```
 
-改完重新运行 `xcodegen` 和编译。方法和音源文件的基本一一对应，完整的接口和说明在 `apple/Kit/Sources/SongforMeKit/Source.swift`。
+改完重新运行 `xcodegen` 和编译。方法和插件的基本一一对应，完整的接口和说明在 `apple/Kit/Sources/SongforMeKit/Source.swift`。
 
-请只接入你有权使用的内容，并遵守对应服务的条款。本项目不提供、也不接受任何音源的代码。
+请只接入你有权使用的内容，并遵守对应服务的条款。本仓库不提供、也不接受任何音源的代码。
 
 ## 代码
 
@@ -131,11 +158,13 @@ nonisolated struct MySource: MusicSource {
 | `apple/Kit/…/Library.swift` | 同步、扩充候选、生成推荐的流程 |
 | `apple/Kit/…/Report.swift` | 听歌报告的统计（纯函数） |
 | `apple/Kit/…/Source.swift` | 音源接口 |
-| `apple/Kit/…/ScriptSource.swift`、`ScriptRunner.swift` | 音源文件：数据转换；隔离的运行环境 |
+| `apple/Kit/…/ScriptSource.swift`、`ScriptRunner.swift` | 插件：数据转换；隔离的运行环境 |
+| `apple/Kit/…/ScriptLogin.swift`、`ScriptDownload.swift` | 插件的网页登录；从链接下载插件 |
 | `apple/Kit/…/Player.swift`、`PlayOrder.swift` | 播放队列、随机和循环、行为记录；穿插频率 |
 | `apple/Kit/…/Store.swift` | 本地曲库（SQLite） |
 | `apple/Mac/App/AppModel.swift` | 界面的状态和动作 |
-| `apple/Mac/App/SourcePack.swift`、`AppSources.swift` | 找到编译进来的音源；添加、移除音源文件 |
+| `apple/Mac/App/SourcePack.swift`、`AppSources.swift` | 找到编译进来的音源；添加、移除插件 |
+| `apple/Mac/App/WebSession.swift` | 登录窗口和登录状态 |
 | `apple/Mac/Audio/` | AVPlayer 播放、系统“正在播放”和媒体键 |
 | `apple/Mac/UI/` | 主界面（配色在 `Theme.swift`） |
 | `apple/Mac/Report/` | 听歌报告、年度回顾、分享图 |
