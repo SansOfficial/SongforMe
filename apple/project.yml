@@ -1,0 +1,36 @@
+# xcodegen 的工程描述：改完运行 `xcodegen`，不要手改 .xcodeproj
+name: SongforMe
+options:
+  bundleIdPrefix: com.sansofficial
+  deploymentTarget: { macOS: "26.0" }
+  developmentLanguage: zh-Hans
+packages:
+  SongforMeKit: { path: Kit }
+targets:
+  SongforMe:
+    type: application
+    platform: macOS
+    # local/sources 是自己接的音源，没有这个目录就编译成不带音源的版本
+    sources: [Mac, { path: ../local/sources, optional: true }]
+    dependencies: [{ package: SongforMeKit }]
+    info:
+      path: Mac/Info.plist
+      properties:
+        CFBundleDisplayName: SongforMe
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        CFBundleDevelopmentRegion: zh-Hans
+        LSApplicationCategoryType: public.app-category.music
+        LSMinimumSystemVersion: "26.0"
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sansofficial.songforme
+        SWIFT_VERSION: "6.0"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
