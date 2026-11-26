@@ -86,7 +86,7 @@ struct ImmersiveView: View {
                 Spacer()
                 ScenePicker(scene: $scene)
                 IconButton(icon: "arrow.down.right.and.arrow.up.left", label: "退出全屏（Esc）", size: 15) { immersive.close() }
-                    .glassEffect(.regular.interactive(), in: .circle)
+                    .glass(in: .circle, interactive: true)
             }
             .padding(24)
             Spacer()
@@ -132,7 +132,7 @@ private struct ScenePicker: View {
             }
         }
         .padding(3)
-        .glassEffect(in: .capsule)
+        .glass(in: .capsule)
         .animation(.spring(duration: 0.4, bounce: 0.2), value: scene)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("效果")

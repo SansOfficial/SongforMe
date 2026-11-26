@@ -178,16 +178,35 @@ struct PlayButton: View {
         Button(action: action) {
             Label("播放", systemImage: "play.fill").padding(.horizontal, 6)
         }
-        .buttonStyle(.glassProminent)
-        .controlSize(.large)
-        .tint(Theme.accent)
+        .primaryButton()
     }
 }
 
+// macOS 26 用玻璃，更早的系统（15）换成毛玻璃材质和普通按钮
 extension View {
     /// 页头的次要按钮
-    func secondaryButton() -> some View {
-        buttonStyle(.glass).controlSize(.large)
+    @ViewBuilder func secondaryButton() -> some View {
+        if #available(macOS 26, *) { buttonStyle(.glass).controlSize(.large) } else { buttonStyle(.bordered).controlSize(.large) }
+    }
+
+    /// 主按钮：强调色
+    @ViewBuilder func primaryButton() -> some View {
+        if #available(macOS 26, *) {
+            buttonStyle(.glassProminent).controlSize(.large).tint(Theme.accent)
+        } else {
+            buttonStyle(.borderedProminent).controlSize(.large).tint(Theme.accent)
+        }
+    }
+
+    /// 浮在内容上的一层
+    @ViewBuilder func glass(in shape: some Shape, interactive: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+                .overlay(shape.stroke(.primary.opacity(0.08), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+        }
     }
 }
 

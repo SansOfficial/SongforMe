@@ -2,7 +2,7 @@
 name: SongforMe
 options:
   bundleIdPrefix: com.sansofficial
-  deploymentTarget: { macOS: "26.0" }
+  deploymentTarget: { macOS: "15.0" }
   developmentLanguage: zh-Hans
 packages:
   SongforMeKit: { path: Kit }
@@ -17,11 +17,11 @@ targets:
       path: Mac/Info.plist
       properties:
         CFBundleDisplayName: SongforMe
-        CFBundleShortVersionString: "1.2"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "1.3"
+        CFBundleVersion: "4"
         CFBundleDevelopmentRegion: zh-Hans
         LSApplicationCategoryType: public.app-category.music
-        LSMinimumSystemVersion: "26.0"
+        LSMinimumSystemVersion: "15.0"
         NSHumanReadableCopyright: ""
         # 音源可以连用户自己填的、局域网里的服务器
         NSAppTransportSecurity: { NSAllowsLocalNetworking: true }

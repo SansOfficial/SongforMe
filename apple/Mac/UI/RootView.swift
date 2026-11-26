@@ -51,7 +51,7 @@ private struct Notices: View {
                     .foregroundStyle(toast.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
-                    .glassEffect(in: .capsule)
+                    .glass(in: .capsule)
                     .id(toast.id)
                     .transition(.opacity.combined(with: .offset(y: 10)))
             }
@@ -62,7 +62,7 @@ private struct Notices: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
-                .glassEffect(in: .capsule)
+                .glass(in: .capsule)
                 .transition(.opacity.combined(with: .offset(y: 10)))
             }
         }

@@ -145,9 +145,7 @@ struct LoginButtons: View {
         HStack(spacing: 10) {
             ForEach(app.signedOut, id: \.info.id) { source in
                 Button("登录\(source.info.spaced)") { Task { await app.login(source) } }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                    .tint(Theme.accent)
+                    .primaryButton()
             }
         }
     }
@@ -299,9 +297,7 @@ private struct NoSource: View {
             Text("还没有音源").font(.title3.bold())
             Text("SongforMe 本身不带音源。添加一个社区插件，就能在这里听歌了。").foregroundStyle(.secondary)
             Button("添加插件…") { app.adding = true }
-                .buttonStyle(.glassProminent)
-                .controlSize(.large)
-                .tint(Theme.accent)
+                .primaryButton()
         }
         .frame(maxWidth: .infinity)
     }

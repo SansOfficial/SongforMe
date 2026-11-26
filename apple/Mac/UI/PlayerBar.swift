@@ -17,7 +17,7 @@ struct PlayerBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        .glass(in: .rect(cornerRadius: 22))
         .padding(.horizontal, 16)
         .padding(.bottom, 14)
     }
