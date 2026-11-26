@@ -222,8 +222,12 @@ private struct SideControls: View {
                 Text("词").font(.system(size: 13, weight: .semibold)).frame(width: 28, height: 28).contentShape(.circle)
             }
             .buttonStyle(IconButtonStyle(active: desktop.visible))
-            .help(desktop.visible ? "关闭桌面歌词" : "打开桌面歌词")
+            .help(desktop.visible ? "关闭桌面歌词（右键还有刘海歌词）" : "打开桌面歌词（右键还有刘海歌词）")
             .accessibilityLabel("桌面歌词")
+            .contextMenu {
+                Toggle("桌面歌词", isOn: Binding { desktop.visible } set: { _ in desktop.toggle() })
+                Toggle("刘海歌词", isOn: Binding { NotchLyrics.shared.visible } set: { _ in NotchLyrics.shared.toggle() })
+            }
             // 锁定在歌词窗口上操作；锁住后鼠标点不到它，只能在这里解锁
             if desktop.visible, desktop.locked {
                 IconButton(icon: "lock.fill", label: "解锁桌面歌词", size: 12) { desktop.locked = false }

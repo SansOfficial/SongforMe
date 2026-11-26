@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Shortcuts.install()
         DesktopLyrics.shared.restore()
+        NotchLyrics.shared.restore()
         #if DEBUG
         DebugRemote.install()
         #endif
@@ -59,6 +60,7 @@ struct PlaybackCommands: Commands {
             Divider()
             Button("全屏") { Immersive.shared.toggle() }.disabled(app.player.current == nil)
             Button(DesktopLyrics.shared.visible ? "关闭桌面歌词" : "打开桌面歌词") { DesktopLyrics.shared.toggle() }
+            Button(NotchLyrics.shared.visible ? "关闭刘海歌词" : "打开刘海歌词") { NotchLyrics.shared.toggle() }
         }
     }
 }

@@ -65,6 +65,7 @@ final class Immersive {
         self.clip = clip
 
         DesktopLyrics.shared.suppressed = true
+        NotchLyrics.shared.suppressed = true
         AppModel.shared.lyrics.watch("immersive", true)
         // 先在看不见的时候把第一帧画好，再开始扩开
         window.alphaValue = 0
@@ -134,6 +135,7 @@ final class Immersive {
         screenObserver = nil
         AppModel.shared.lyrics.watch("immersive", false)
         DesktopLyrics.shared.suppressed = false
+        NotchLyrics.shared.suppressed = false
     }
 
     /// 裁剪框从一处动到另一处，里面的画面原地不动。整段动画交给系统合成，主线程忙也不卡

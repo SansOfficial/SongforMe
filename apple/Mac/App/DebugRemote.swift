@@ -12,7 +12,9 @@ extension Notification.Name {
 /// 只在调试版里有：从命令行换页面、给应用自己的窗口拍照
 enum DebugRemote {
     static func install() {
-        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.sansofficial.songforme.debug"), object: nil, queue: .main) { note in
+        // 同时开着几份调试版时，用 SONGFORME_DEBUG_CHANNEL 分开
+        let channel = ProcessInfo.processInfo.environment["SONGFORME_DEBUG_CHANNEL"] ?? "com.sansofficial.songforme.debug"
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name(channel), object: nil, queue: .main) { note in
             let text = note.object as? String ?? ""
             MainActor.assumeIsolated { run(text.split(separator: " ", maxSplits: 1).map(String.init)) }
         }
@@ -97,6 +99,12 @@ enum DebugRemote {
         case "immersive": Immersive.shared.toggle()
         case "scene": UserDefaults.standard.set(arg, forKey: "scene")
         case "lyrics": DesktopLyrics.shared.toggle()
+        case "notch": NotchLyrics.shared.toggle()
+        case "notch-geo": try? "\(NotchLyrics.shared.hitArea) housing=\(NotchLyrics.shared.housing) open=\(NotchLyrics.shared.open)".write(toFile: arg, atomically: true, encoding: .utf8)
+        case "notch-line": NotchLyrics.shared.preview = arg.isEmpty ? nil : arg
+        case "notch-open":
+            NotchLyrics.shared.hold = arg == "1"
+            NotchLyrics.shared.setOpen(arg == "1")
         case "look": Appearance.current = Appearance(rawValue: arg) ?? .light
         case "state":
             let p = app.player
