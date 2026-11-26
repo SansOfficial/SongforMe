@@ -27,35 +27,65 @@ final class Updater {
         return nil
     }()
 
+    /// 带着本机音源编译的版本不更新
+    var supported: Bool { test != nil || !SourcePack.bundled }
+
+    /// 在设置里关掉后不再联网检查
+    var autoCheck = UserDefaults.standard.object(forKey: "autoCheckUpdates") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(autoCheck, forKey: "autoCheckUpdates")
+            start()
+        }
+    }
+
+    /// 正在手动检查
+    private(set) var checking = false
+    @ObservationIgnored private var running = false
+
     private var enabled: Bool {
         if test != nil { return true }
         #if DEBUG
         return false
         #else
-        return !SourcePack.bundled && (UserDefaults.standard.object(forKey: "autoCheckUpdates") as? Bool ?? true)
+        return supported && autoCheck
         #endif
     }
 
     func start() {
-        guard enabled else { return }
+        guard enabled, !running else { return }
+        running = true
         Task {
-            while available == nil {
+            while available == nil, enabled {
                 await check()
                 try? await Task.sleep(for: .seconds(24 * 3600))
             }
+            running = false
         }
     }
 
-    private func check() async {
+    /// 设置里的“检查更新”
+    func checkNow() async {
+        guard supported, !checking else { return }
+        checking = true
+        defer { checking = false }
+        if available == nil, !(await check()) { return AppModel.shared.say("没连上 GitHub，过一会儿再试", error: true) }
+        if available == nil { AppModel.shared.say("已经是最新版本") }
+    }
+
+    /// 问到了发布信息就返回 true（不管有没有新版本）
+    @discardableResult
+    private func check() async -> Bool {
         var request = URLRequest(url: test?.feed ?? Updates.latestURL, timeoutInterval: 20)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("SongforMe", forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode ?? 200 == 200,
-              let release = try? Updates.parse(data, allowAnyURL: test != nil),
-              Updates.isNewer(release.version, than: current) else { return }
+              (response as? HTTPURLResponse)?.statusCode ?? 200 == 200 else { return false }
+        let found: AppRelease?
+        do { found = try Updates.parse(data, allowAnyURL: test != nil) } catch { return false }
+        guard let release = found, Updates.isNewer(release.version, than: current) else { return true }
         available = release
         AppModel.shared.say("SongforMe \(release.version) 可以更新了，在左下角的菜单里")
+        return true
     }
 
     func install() async {

@@ -112,80 +112,42 @@ private struct Avatar: View {
     }
 }
 
-/// 管理类的操作（同步、调校、导入种子歌单、外观、退出）都收在这里
+/// 常用的几项：更新、登录、听歌报告、同步；其余的设置都在设置页里
 struct AccountPanel: View {
     let close: () -> Void
     @Environment(AppModel.self) private var app
-    /// 打开了哪个二级页面
-    private enum Sub { case seeds, sources }
-    @State private var sub: Sub?
-    @State private var appearance = Appearance.current
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            switch sub {
-            case .seeds: seeds
-            case .sources: sources
-            case nil: main
+            let updater = Updater.shared
+            if let release = updater.available {
+                row(updater.status ?? "更新到 \(release.version)", "arrow.down.circle") { Task { await updater.install() } }
+                    .disabled(updater.status != nil)
+                Divider().padding(.vertical, 4)
             }
+            ForEach(app.signedOut, id: \.info.id) { source in
+                row("登录\(source.info.spaced)", "person.crop.circle") { Task { await app.login(source) } }
+            }
+            if !app.signedOut.isEmpty { Divider().padding(.vertical, 4) }
+            row("听歌报告", "chart.bar") { app.openReport() }
+            if app.loggedIn {
+                row("同步曲库", "arrow.triangle.2.circlepath") { Task { await app.sync() } }.disabled(app.busy != nil)
+            }
+            Divider().padding(.vertical, 4)
+            Button {
+                close()
+                app.go(.settings(.general))
+            } label: {
+                HStack {
+                    Label("设置", systemImage: "gearshape")
+                    Spacer()
+                    Text("⌘,").foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(MenuRowStyle())
         }
         .padding(10)
         .frame(width: 250)
-        .animation(.snappy(duration: 0.22), value: sub)
-        #if DEBUG
-        .onReceive(NotificationCenter.default.publisher(for: .debugPanel)) { if $0.object as? String == "sources" { sub = .sources } }
-        #endif
-    }
-
-    @ViewBuilder private var main: some View {
-        let updater = Updater.shared
-        if let release = updater.available {
-            row(updater.status ?? "更新到 \(release.version)", "arrow.down.circle") { Task { await updater.install() } }
-                .disabled(updater.status != nil)
-            Divider().padding(.vertical, 4)
-        }
-        ForEach(app.signedOut, id: \.info.id) { source in
-            row("登录\(source.info.spaced)", "person.crop.circle") { Task { await app.login(source) } }
-        }
-        if !app.signedOut.isEmpty { Divider().padding(.vertical, 4) }
-        row("听歌报告", "chart.bar") { app.openReport() }
-        row("算法调校", "slider.horizontal.3") { app.go(.tuning) }
-        Button { sub = .seeds } label: {
-            HStack {
-                Label("口味种子歌单", systemImage: "leaf")
-                Spacer()
-                let n = app.playlists.count { $0.kind == .imported }
-                if n > 0 { Text("\(n)").foregroundStyle(.tertiary) }
-                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
-        }
-        .buttonStyle(MenuRowStyle())
-        Button { sub = .sources } label: {
-            HStack {
-                Label("音源", systemImage: "music.note.house")
-                Spacer()
-                if !app.hub.all.isEmpty { Text("\(app.hub.all.count)").foregroundStyle(.tertiary) }
-                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
-        }
-        .buttonStyle(MenuRowStyle())
-        if app.loggedIn {
-            row("同步曲库", "arrow.triangle.2.circlepath") { Task { await app.sync() } }.disabled(app.busy != nil)
-        }
-        Divider().padding(.vertical, 4)
-        Picker("外观", selection: $appearance) {
-            ForEach(Appearance.allCases, id: \.self) { Text($0.title).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .padding(.vertical, 2)
-        .onChange(of: appearance) { Appearance.current = appearance }
-        let signedIn = app.hub.all.filter { app.loggedIn($0) }
-        if !signedIn.isEmpty { Divider().padding(.vertical, 4) }
-        ForEach(signedIn, id: \.info.id) { source in
-            let title = app.hub.all.count(where: \.hasAccount) > 1 ? "退出\(source.info.spaced)" : "退出登录"
-            row(title, "rectangle.portrait.and.arrow.right") { Task { await app.logout(source) } }
-        }
     }
 
     private func row(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
@@ -196,76 +158,5 @@ struct AccountPanel: View {
             Label(title, systemImage: icon)
         }
         .buttonStyle(MenuRowStyle())
-    }
-
-    // 二级页面：音源插件的添加和移除
-    @ViewBuilder private var sources: some View {
-        Button { sub = nil } label: { Label("音源", systemImage: "chevron.left").font(.headline) }
-            .buttonStyle(MenuRowStyle())
-        ForEach(app.hub.all, id: \.info.id) { source in
-            HStack(spacing: 0) {
-                Text(source.info.name).lineLimit(1)
-                Spacer(minLength: 6)
-                if let script = source as? ScriptSource {
-                    if !script.fields.isEmpty {
-                        IconButton(icon: "gearshape", label: "设置\(source.info.spaced)", size: 11) {
-                            close()
-                            app.settingUp = SourceSetup(source: script)
-                        }
-                    }
-                    IconButton(icon: "xmark", label: "移除\(source.info.spaced)", size: 11) {
-                        close()
-                        app.askRemove(script)
-                    }
-                } else {
-                    Text("自带").font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-            .frame(minHeight: 28)
-            .padding(.horizontal, 8)
-        }
-        row("添加插件…", "plus") { app.adding = true }
-    }
-
-    // 二级页面：导入公开歌单当口味种子，查看、移除已导入的
-    @State private var link = ""
-
-    @ViewBuilder private var seeds: some View {
-        let list = app.playlists.filter { $0.kind == .imported }
-        Button { sub = nil } label: { Label("口味种子歌单", systemImage: "chevron.left").font(.headline) }
-            .buttonStyle(MenuRowStyle())
-        Text("导入的歌会计入你的口味。").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
-        HStack {
-            TextField("粘贴歌单链接或歌单号", text: $link).textFieldStyle(.roundedBorder).onSubmit(submit)
-            Button("导入", action: submit).disabled(link.trimmingCharacters(in: .whitespaces).isEmpty || app.busy != nil)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        if list.isEmpty { Text("还没有导入的歌单").foregroundStyle(.secondary).padding(8) }
-        ForEach(list) { p in
-            HStack(spacing: 0) {
-                Button {
-                    close()
-                    app.go(.playlist(p.id))
-                } label: {
-                    HStack {
-                        Text(p.title).lineLimit(1)
-                        Spacer()
-                        Text("\(p.songCount)").foregroundStyle(.tertiary)
-                    }
-                }
-                .buttonStyle(MenuRowStyle())
-                IconButton(icon: "xmark", label: "移除种子歌单「\(p.title)」", size: 11) { Task { await app.removePlaylist(p.id) } }
-            }
-        }
-    }
-
-    private func submit() {
-        let text = link
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        Task {
-            await app.importSeed(text)
-            link = ""
-        }
     }
 }

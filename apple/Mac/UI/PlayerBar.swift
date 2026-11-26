@@ -82,18 +82,19 @@ private struct NowPart: View {
     }
 }
 
-/// 中间：随机、上一首、播放、下一首、循环
+/// 中间：播放方式、上一首、播放、下一首、播放队列（刘海里地方小，只留中间三个）
 struct Transport: View {
     var big: CGFloat = 1
     var tint: Color = Theme.accent
     var ink: Color = .white
+    var compact = false
     @Environment(AppModel.self) private var app
 
     var body: some View {
         let player = app.player
         let none = player.current == nil
         HStack(spacing: 10 * big) {
-            ShuffleButton(size: 14 * big, tint: tint)
+            if !compact { PlayModeButton(size: 14 * big, tint: tint) }
             IconButton(icon: "backward.fill", label: "上一首", size: 16 * big) { player.previous() }.disabled(none)
             Button { app.togglePlay() } label: {
                 Image(systemName: player.playing ? "pause.fill" : "play.fill")
@@ -111,7 +112,7 @@ struct Transport: View {
             .help(player.playing ? "暂停" : "播放")
             .accessibilityLabel(player.playing ? "暂停" : "播放")
             IconButton(icon: "forward.fill", label: "下一首", size: 16 * big) { player.next() }.disabled(none)
-            RepeatButton(size: 14 * big, tint: tint)
+            if !compact { QueueButton(size: 14 * big) }
         }
     }
 }
@@ -140,31 +141,25 @@ private struct LoadingRing: View {
     }
 }
 
-struct ShuffleButton: View {
+/// 播放方式：点一下换下一种，右键直接选
+struct PlayModeButton: View {
     var size: CGFloat = 14
     var tint: Color = Theme.accent
     @Environment(AppModel.self) private var app
     var body: some View {
-        let look = app.shuffleLook
-        IconButton(icon: "shuffle", label: look == .off ? "随机播放：关" : look == .smart ? "智能随机" : "随机播放", size: size, active: look != .off, tint: tint) { app.cycleShuffle() }
+        let mode = app.playMode
+        IconButton(icon: mode.icon, label: "\(mode.title)（点一下切换）", size: size, active: mode != .order, tint: tint) { app.cyclePlayMode() }
             .overlay(alignment: .topTrailing) {
-                if look == .smart {
+                if mode == .smart {
                     Image(systemName: "sparkle").font(.system(size: size * 0.6, weight: .bold)).foregroundStyle(tint).allowsHitTesting(false)
                 }
             }
-    }
-}
-
-struct RepeatButton: View {
-    var size: CGFloat = 14
-    var tint: Color = Theme.accent
-    @Environment(AppModel.self) private var app
-    var body: some View {
-        let mode = app.player.prefs.repeat
-        IconButton(
-            icon: mode == .one ? "repeat.1" : "repeat", label: mode == .off ? "循环：关" : mode == .all ? "列表循环" : "单曲循环",
-            size: size, active: mode != .off, tint: tint
-        ) { app.cycleRepeat() }
+            .contextMenu {
+                Picker("播放方式", selection: Binding { app.playMode } set: { app.setPlayMode($0) }) {
+                    ForEach(app.playModes, id: \.self) { Label($0.title, systemImage: $0.icon).tag($0) }
+                }
+                .pickerStyle(.inline)
+            }
     }
 }
 
@@ -189,7 +184,7 @@ struct ProgressRow: View {
     }
 }
 
-/// 右边：喜欢、更多、队列、音量、全屏、桌面歌词
+/// 右边：喜欢、更多、音量、桌面歌词
 private struct SideControls: View {
     @Environment(AppModel.self) private var app
     @Environment(DesktopLyrics.self) private var desktop
@@ -216,7 +211,6 @@ private struct SideControls: View {
                     AddToPlaylistPanel(song: item.song) { adding = false }.environment(app)
                 }
             }
-            QueueButton()
             VolumeButton()
             Button { desktop.toggle() } label: {
                 Text("词").font(.system(size: 13, weight: .semibold)).frame(width: 28, height: 28).contentShape(.circle)

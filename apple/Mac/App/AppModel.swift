@@ -9,9 +9,43 @@ struct ArtistRef: Hashable {
 }
 
 /// 主区域显示的页面
+/// 设置页的三栏
+enum PlayMode: CaseIterable {
+    case loop, one, shuffle, smart, order
+    var title: String {
+        switch self {
+        case .loop: "列表循环"
+        case .one: "单曲循环"
+        case .shuffle: "随机播放"
+        case .smart: "智能随机"
+        case .order: "顺序播放"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .loop: "repeat"
+        case .one: "repeat.1"
+        case .shuffle, .smart: "shuffle"
+        case .order: "arrow.right"
+        }
+    }
+}
+
+enum SettingsTab: String, CaseIterable, Hashable {
+    case general, reco, sources
+
+    var title: String {
+        switch self {
+        case .general: "通用"
+        case .reco: "推荐"
+        case .sources: "音源与账号"
+        }
+    }
+}
+
 enum Page: Hashable {
     case reco
-    case tuning
+    case settings(SettingsTab)
     case playlist(String)
     case artist(ArtistRef, ArtistTab)
     case album(Album, ArtistRef?)
@@ -25,7 +59,7 @@ enum Page: Hashable {
     var identity: String {
         switch self {
         case .reco: "reco"
-        case .tuning: "tuning"
+        case .settings: "settings"
         case .playlist(let id): "playlist:\(id)"
         case .artist(let a, _): "artist:\(a.mid)"
         case .album(let a, _): "album:\(a.mid)"
@@ -530,7 +564,8 @@ final class AppModel {
         if case .report(let period, let date) = next { return await showReport(period, date, mine) }
         reportInput = nil
         content = Content()
-        if next == .reco || next == .tuning { return }
+        if case .settings = next { return }
+        if next == .reco { return }
         content.loading = true
         var loaded = Content()
         do {
@@ -553,7 +588,7 @@ final class AppModel {
             case .search(let q, let kind, let id):
                 loaded.results = SearchResults().merging(try await find(q, kind, in: id, page: 1), page: 1)
                 loaded.songs = loaded.results.songs
-            case .reco, .tuning, .report:
+            case .reco, .settings, .report:
                 break
             }
         } catch {
@@ -676,25 +711,39 @@ final class AppModel {
         player.prefs.shuffle == .smart && !player.queue.isEmpty && !canSmartShuffle ? .on : player.prefs.shuffle
     }
 
-    /// 随机按钮：关 → 随机 →（我喜欢里）智能随机 → 关
-    func cycleShuffle() {
-        switch player.prefs.shuffle {
-        case .off:
-            player.setShuffle(.on)
-        case .on where canSmartShuffle:
-            announceSmart = true
-            player.setShuffle(.smart)
-        default:
-            player.setShuffle(.off)
+    /// 播放方式：一个按钮依次切换，底下还是随机和循环两项设置
+    var playMode: PlayMode {
+        if player.prefs.repeat == .one { return .one }
+        switch shuffleLook {
+        case .smart: return .smart
+        case .on: return .shuffle
+        case .off: return player.prefs.repeat == .off ? .order : .loop
         }
     }
 
-    func cycleRepeat() {
-        switch player.prefs.repeat {
-        case .off: player.setRepeat(.all)
-        case .all: player.setRepeat(.one)
-        case .one: player.setRepeat(.off)
+    /// 能选的播放方式；智能随机只在“我喜欢”里有
+    var playModes: [PlayMode] { PlayMode.allCases.filter { $0 != .smart || canSmartShuffle } }
+
+    func setPlayMode(_ mode: PlayMode) {
+        switch mode {
+        case .loop, .order, .one:
+            player.setShuffle(.off)
+            player.setRepeat(mode == .order ? .off : mode == .one ? .one : .all)
+        case .shuffle:
+            player.setRepeat(.all)
+            player.setShuffle(.on)
+        case .smart:
+            player.setRepeat(.all)
+            announceSmart = true
+            player.setShuffle(.smart)
         }
+    }
+
+    /// 列表循环 → 单曲循环 → 随机播放 →（我喜欢里）智能随机 → 顺序播放 → 列表循环
+    func cyclePlayMode() {
+        let all = PlayMode.allCases, modes = playModes
+        let i = all.firstIndex(of: playMode) ?? 0
+        setPlayMode((1...all.count).map { all[(i + $0) % all.count] }.first(where: modes.contains) ?? .loop)
     }
 
     /// “我喜欢”页上的智能随机：直接打乱开始放，并穿插推荐

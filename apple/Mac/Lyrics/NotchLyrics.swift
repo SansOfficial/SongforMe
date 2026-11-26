@@ -291,7 +291,7 @@ private struct NotchPlayer: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Transport(big: 0.85, tint: .white, ink: .black)
+            Transport(big: 0.85, tint: .white, ink: .black, compact: true)
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)

@@ -38,9 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct PlaybackCommands: Commands {
     private var app: AppModel { .shared }
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {}
+        CommandGroup(replacing: .appSettings) {
+            Button("设置…") {
+                openWindow(id: "main")
+                app.go(.settings(.general))
+            }
+            .keyboardShortcut(",")
+        }
         CommandGroup(after: .textEditing) {
             Button("搜索") { NotificationCenter.default.post(name: .focusSearch, object: nil) }.keyboardShortcut("f")
         }
@@ -53,8 +61,9 @@ struct PlaybackCommands: Commands {
             Button("减小音量") { Shortcuts.nudgeVolume(-0.05) }.keyboardShortcut(.downArrow)
             Button(app.player.prefs.muted ? "取消静音" : "静音") { app.player.toggleMute() }
             Divider()
-            Button("切换随机播放") { app.cycleShuffle() }
-            Button("切换循环方式") { app.cycleRepeat() }
+            Picker("播放方式", selection: Binding { app.playMode } set: { app.setPlayMode($0) }) {
+                ForEach(app.playModes, id: \.self) { Text($0.title).tag($0) }
+            }
             Divider()
             Button("喜欢 / 取消喜欢") { if let s = app.player.current?.song { app.toggleLike(s) } }.keyboardShortcut("l").disabled(app.player.current == nil)
             Divider()

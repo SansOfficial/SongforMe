@@ -96,7 +96,6 @@ struct ImmersiveView: View {
                     Transport(big: 1.35, tint: .white, ink: Color(white: 0.07))
                     HStack {
                         VolumeButton(size: 17)
-                        QueueButton(size: 17)
                         Spacer()
                         if let song = app.player.current?.song { HeartButton(song: song, size: 19) }
                     }

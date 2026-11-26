@@ -25,7 +25,8 @@ enum DebugRemote {
         let arg = words.count > 1 ? words[1] : ""
         switch words.first {
         case "reco": app.go(.reco)
-        case "tuning": app.go(.tuning)
+        case "tuning": app.go(.settings(.reco))
+        case "settings": app.go(.settings(SettingsTab(rawValue: arg) ?? .general))
         case "report":
             let parts = arg.split(separator: " ").map(String.init)
             let date = parts.count > 1 ? try? Date(parts[1] + "T04:00:00Z", strategy: .iso8601) : nil
@@ -93,6 +94,7 @@ enum DebugRemote {
         case "play": app.playList()
         case "toggle": app.togglePlay()
         case "mute": app.player.toggleMute()
+        case "mode": app.cyclePlayMode()
         case "seek": app.player.seek(Double(arg) ?? 0)
         case "login": if let s = app.hub.named(arg) ?? app.hub.all.first { Task { await app.login(s) } }
         case "next": app.player.next()

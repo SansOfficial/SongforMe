@@ -10,7 +10,7 @@ struct PageView: View {
             LazyVStack(spacing: 0) {
                 switch app.page {
                 case .reco: RecoPage()
-                case .tuning: TuningPage()
+                case .settings(let tab): SettingsPage(tab: tab)
                 case .playlist(let id): PlaylistPage(id: id)
                 case .artist(let a, let tab): ArtistPage(artist: a, tab: tab)
                 case .album(let album, let artist): AlbumPage(album: album, artist: artist)
@@ -360,113 +360,6 @@ struct SearchPageView: View {
                 }
             }
             LoadMore()
-        }
-    }
-}
-
-// MARK: - 算法调校
-
-struct TuningPage: View {
-    @Environment(AppModel.self) private var app
-
-    var body: some View {
-        PageHead(title: "算法调校") {
-            Button("换一批", systemImage: "arrow.clockwise") {
-                Task {
-                    await app.generate()
-                    app.go(.reco)
-                }
-            }
-            .secondaryButton()
-            .disabled(app.likedMids.isEmpty || app.busy != nil)
-            Button("扩充候选池", systemImage: "scope") { Task { await app.expand() } }
-                .secondaryButton()
-                .disabled(app.likedMids.isEmpty || app.busy != nil)
-        }
-        VStack(alignment: .leading, spacing: 24) {
-            Knob(title: "歌手", left: "只要熟悉的歌手", right: "尽量是没听过的歌手", key: \.exploration)
-            Knob(title: "热度", left: "大众热门", right: "冷门小众", key: \.obscurity)
-            Knob(title: "新旧", left: "不在乎发行时间", right: "偏向新歌", key: \.freshness)
-            Knob(title: "贴合口味", left: "语种 / 流派 / 年代随便", right: "严格贴合我平时听的", key: \.tasteMatch)
-            Knob(title: "熟歌回放", left: "全是新歌", right: "一半是很久没听的喜欢的歌", key: \.familiarRatio, max: 0.5, unit: "%")
-
-            HStack(spacing: 28) {
-                NumberField(title: "每批数量", key: \.batchSize, range: 5...100)
-                NumberField(title: "同一歌手最多", key: \.maxPerArtist, range: 1...10)
-                NumberField(title: "几天内不重复推荐", key: \.repeatCooldownDays, range: 0...365)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("只推荐这些语种").font(.headline)
-                HStack(spacing: 8) {
-                    ForEach(Languages.all, id: \.code) { code, name in
-                        Toggle(name, isOn: language(code)).toggleStyle(.button).tint(Theme.accent)
-                    }
-                }
-            }
-
-            if app.canSyncLikes {
-                Toggle("喜欢和歌单同步到账号", isOn: Binding(get: { app.syncLikes }, set: { app.setSyncLikes($0) }))
-            }
-        }
-        .frame(maxWidth: 680, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func language(_ code: Int) -> Binding<Bool> {
-        Binding(get: { app.settings.languages?.contains(code) ?? true }, set: { on in
-            let all = Languages.all.map(\.code)
-            var now = Set(app.settings.languages ?? all)
-            if on { now.insert(code) } else { now.remove(code) }
-            app.update { $0.languages = now.count == all.count || now.isEmpty ? nil : now.sorted() }
-        })
-    }
-}
-
-private struct Knob: View {
-    let title: String
-    let left: String
-    let right: String
-    let key: WritableKeyPath<RecoSettings, Double>
-    var max = 1.0
-    var unit = ""
-    @Environment(AppModel.self) private var app
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title).font(.headline)
-                Spacer()
-                Text("\(Int((app.settings[keyPath: key] * 100).rounded()))\(unit)").monospacedDigit().foregroundStyle(.secondary)
-            }
-            Slider(value: Binding(get: { app.settings[keyPath: key] }, set: { v in app.update { $0[keyPath: key] = (v * 20 / max).rounded() / 20 * max } }), in: 0...max)
-                .tint(Theme.accent)
-                .accessibilityLabel(title)
-            HStack {
-                Text(left)
-                Spacer()
-                Text(right)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct NumberField: View {
-    let title: String
-    let key: WritableKeyPath<RecoSettings, Int>
-    let range: ClosedRange<Int>
-    @Environment(AppModel.self) private var app
-
-    var body: some View {
-        let value = Binding(get: { app.settings[keyPath: key] }, set: { v in app.update { $0[keyPath: key] = min(range.upperBound, max(range.lowerBound, v)) } })
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.subheadline).foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                TextField(title, value: value, format: .number).textFieldStyle(.roundedBorder).frame(width: 64)
-                Stepper(title, value: value, in: range).labelsHidden()
-            }
         }
     }
 }
