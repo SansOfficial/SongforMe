@@ -280,6 +280,16 @@ public final class Player {
         queue = head + PlayOrder.weave(queue.dropFirst(index + 1).filter { !$0.extra }, fresh)
     }
 
+    /// 换掉还没放的歌（推荐跟着反馈重排时用）；放过的和正在放的不动
+    public func replaceUpcoming(_ items: [QueueItem]) {
+        let head = Array(queue.prefix(index + 1))
+        let played = Set(head.map(\.song.mid))
+        let rest = items.filter { !played.contains($0.song.mid) }
+        origin = origin.filter { played.contains($0.song.mid) } + rest
+        epoch += 1
+        queue = head + (prefs.shuffle == .off ? rest : PlayOrder.shuffled(rest, artistOf: { $0.song.singers.first?.mid ?? "" }))
+    }
+
     public func restore(_ saved: PlaybackPrefs) {
         prefs = saved
         applyVolume()

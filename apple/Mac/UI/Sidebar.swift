@@ -84,6 +84,7 @@ struct AccountEntry: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if Updater.shared.available != nil { Circle().fill(Theme.accent).frame(width: 6, height: 6) }
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10)).foregroundStyle(.tertiary)
             }
         }
@@ -137,6 +138,12 @@ struct AccountPanel: View {
     }
 
     @ViewBuilder private var main: some View {
+        let updater = Updater.shared
+        if let release = updater.available {
+            row(updater.status ?? "更新到 \(release.version)", "arrow.down.circle") { Task { await updater.install() } }
+                .disabled(updater.status != nil)
+            Divider().padding(.vertical, 4)
+        }
         ForEach(app.signedOut, id: \.info.id) { source in
             row("登录\(source.info.spaced)", "person.crop.circle") { Task { await app.login(source) } }
         }

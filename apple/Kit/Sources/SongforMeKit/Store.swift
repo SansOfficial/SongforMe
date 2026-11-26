@@ -224,6 +224,11 @@ public actor Store {
         try setRaw(key, json: String(decoding: JSONEncoder().encode(value), as: UTF8.self))
     }
 
+    /// 以 prefix 开头的键（离线评估时找各个音源存的东西）
+    func keys(prefix: String) throws -> [String] {
+        try database.prepare("SELECT key FROM kv WHERE substr(key, 1, ?) = ? ORDER BY key").all(prefix.count, prefix, map: { $0.text(0) })
+    }
+
     public func setRaw(_ key: String, json: String) throws {
         try database.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?,?)").run(key, json)
     }

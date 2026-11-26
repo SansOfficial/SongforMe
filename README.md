@@ -20,12 +20,13 @@ open build/Build/Products/Release/SongforMe.app
 
 ## 功能
 
-- **推荐**：从你喜欢的歌出发找相似的歌和收录了它们的歌单，打分、去重、限制同一歌手的数量，再混入一些很久没听的熟歌。听完、切歌、喜欢、不喜欢、听腻了都会影响之后的推荐。各项权重在“算法调校”里改，算法本身是一个纯函数（`RecoEngine.swift`）。
+- **推荐**：从你喜欢的歌出发找相似的歌和收录了它们的歌单，打分、去重、限制同一歌手的数量，按“探索”的比例给没听过的歌手留名额，再混入一些很久没听的熟歌。听完、切歌、喜欢、不喜欢、听腻了都会影响之后的推荐；推荐出去的歌被喜欢还是被嫌弃，也会反过来调整当初找到它的那个歌单的可信度。正在听这一批推荐时点了喜欢、不喜欢或者很快切掉一首，后面还没放的歌马上跟着重排。各项权重在“算法调校”里改，算法本身是一个纯函数（`RecoEngine.swift`）；改完可以用 `RecoEvalTests.swift` 在自己曲库的拷贝上比一比效果。
 - **智能随机**：放“我喜欢”时平均每 3 首穿插 1 首没听过的推荐。
 - **听歌报告**：日报、周报、月报、年报。年报有逐页翻的回顾，每份报告都能存成一张分享图。
 - **歌词**：桌面歌词可以拖动、缩放、锁定（鼠标穿透），外语歌第二行显示翻译。
 - **全屏**：黑胶、歌词、星轨三种效果。
 - **多个音源**：接了几个就分组显示几个。同一位歌手在不同音源里算同一个人，推荐和报告合在一起算。
+- **自动更新**：打开时和之后每天向 GitHub（`api.github.com`）问一次有没有新版本，有的话左下角菜单里出现“更新到 x.y”，点了确认后才下载，核对过大小和 SHA-256、签名和版本号再替换、重新打开。检查时只发这一个请求，不带任何个人信息。不想让它联网检查：`defaults write com.sansofficial.songforme autoCheckUpdates -bool false`。自己编译、带着本机音源的版本不检查。
 - **快捷键**：空格播放 / 暂停，⌘← ⌘→ 上一首 / 下一首，⌘↑ ⌘↓ 音量，⌘F 搜索，⌘L 喜欢，F 全屏。
 
 ## 插件
@@ -162,6 +163,7 @@ nonisolated struct MySource: MusicSource {
 | `apple/Kit/…/ScriptLogin.swift`、`ScriptDownload.swift` | 插件的网页登录；从链接下载插件 |
 | `apple/Kit/…/Player.swift`、`PlayOrder.swift` | 播放队列、随机和循环、行为记录；穿插频率 |
 | `apple/Kit/…/Store.swift` | 本地曲库（SQLite） |
+| `apple/Kit/…/Updates.swift`、`apple/Mac/App/Updater.swift` | 检查新版本；下载、核对、替换 |
 | `apple/Mac/App/AppModel.swift` | 界面的状态和动作 |
 | `apple/Mac/App/SourcePack.swift`、`AppSources.swift` | 找到编译进来的音源；添加、移除插件 |
 | `apple/Mac/App/WebSession.swift` | 登录窗口和登录状态 |

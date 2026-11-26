@@ -5,13 +5,16 @@ import Foundation
 // 思路分四步：
 //   1. 喜爱度：由“我喜欢”+ 播放器记录的行为（听完 / 早早切歌 / 不喜欢 / 听腻了）算出每首歌的分
 //   2. 口味画像：按喜爱度加权统计语种、流派、年代、歌手的分布
-//   3. 候选打分：每首候选歌带着“它是怎么被找到的”证据，结合画像和可调权重打分
-//   4. 选歌：过滤、去重、限制同一歌手数量，再混入一定比例的熟歌
+//   3. 候选打分：每首候选歌带着“它是怎么被找到的”证据，结合画像和可调权重打分；
+//      推荐出去的歌后来被喜欢还是被嫌弃，会反过来调整当初找到它的那个歌单 / 相似列表的可信度
+//   4. 选歌：过滤、去重、限制同一歌手数量，按“探索”分好陌生歌手和熟悉歌手的名额，再混入一定比例的熟歌
+//
+// 改动前后用 Tests/SongforMeKitTests/RecoEvalTests.swift 在真实曲库的拷贝上比一比。
 
 public struct RecoSettings: Codable, Hashable, Sendable {
     /// 每批推荐多少首
     public var batchSize = 30
-    /// 0 = 只要熟悉的歌手，1 = 尽量推没听过的歌手
+    /// 每批新歌里留给没怎么听过的歌手的比例：0 = 只要熟悉的歌手，1 = 尽量推没听过的歌手
     public var exploration = 0.5
     /// 0 = 不在乎新旧，1 = 明显偏向新发行的歌
     public var freshness = 0.2
@@ -99,6 +102,11 @@ public struct RecoInput {
     public var random: RandomSource
     /// 现在放得了的歌才推荐（比如它的音源已经退出登录就不推）
     public var playable: (Song) -> Bool = { _ in true }
+    /// 这些歌即使刚推荐过也照样参与（重排当前这一批时用）
+    public var keep: Set<String> = []
+    /// 给了就按歌算固定的随机扰动：同一批推荐重排时，没受影响的歌名次不乱跳
+    public var seed: UInt64?
+    var tuning = RecoTuning()
 
     public init(
         songs: [String: Song], likedMids: [String], events: [PlayEvent], evidence: [Evidence], recentlyRecommended: [String: Double] = [:],
@@ -113,6 +121,25 @@ public struct RecoInput {
         self.now = now
         self.random = random
     }
+}
+
+/// 算法内部的几个系数，平时不用动；离线评估时拿来对比各项改动的效果
+struct RecoTuning: Sendable {
+    /// 按推荐出去的歌的结果调整每个歌单 / 相似列表的可信度
+    var reliability = true
+    /// 用名额而不是加分来实现“探索”
+    var quota = true
+    /// 名额模式下熟悉歌手的加分
+    var artistWeight = 0.6
+    /// 熟悉程度低于这个值算陌生歌手
+    var unknownBelow = 0.2
+    /// 口味里语种、流派、年代各占多少
+    var language = 0.5, genre = 0.1, decade = 0.4
+    /// 很少听的特殊版本扣多少分
+    var version = 0.4
+
+    /// 改动之前的算法
+    static let baseline = RecoTuning(reliability: false, quota: false, language: 0.5, genre: 0.25, decade: 0.25, version: 0)
 }
 
 public struct RecoResult: Sendable {
@@ -246,29 +273,152 @@ public enum RecoEngine {
         }
     }
 
-    private struct Aggregate {
-        var raw = 0.0
-        var playlists: Set<String> = []
+    // MARK: 版本类型
+
+    /// 歌名里看得出来的特殊版本
+    enum Version: CaseIterable, Sendable {
+        case live, remix, cover, instrumental, altered
+    }
+
+    private static let versionPatterns: [(Version, NSRegularExpression)] = ([
+        (.live, #"\blive\b|现场|演唱会|音乐会"#),
+        (.remix, #"\bdj\b|dj版|remix|混音|电音|\bedm\b|摇滚版"#),
+        (.cover, #"翻唱|翻自|\bcover\b|原唱[:：]"#),
+        (.instrumental, #"伴奏|纯音乐|\binstrumental\b|\binst\.?\b|钢琴版|吉他版|八音盒|music box|\bkaraoke\b"#),
+        (.altered, #"\d(\.\d+)?x\b|倍速|加速|降调|升调|慢速|变速|\bsped up\b|\bslowed\b|女版|男版|抖音|片段|精简版|\bremaster"#),
+    ] as [(Version, String)]).map { ($0.0, try! NSRegularExpression(pattern: $0.1, options: [.caseInsensitive])) }
+
+    static func versions(of name: String) -> Set<Version> {
+        let range = NSRange(name.startIndex..., in: name)
+        return Set(versionPatterns.filter { $0.1.firstMatch(in: name, range: range) != nil }.map(\.0))
+    }
+
+    // MARK: 来源靠谱度
+
+    /// 推荐出去的歌后来怎么样了：点喜欢 / 听完是好结果，点不喜欢 / 很快切掉是坏结果
+    static func outcomes(_ events: [PlayEvent]) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for e in events {
+            switch e.type {
+            case .like: out[e.mid, default: 0] += 1
+            case .unlike: out[e.mid, default: 0] -= 1
+            case .dislike: out[e.mid, default: 0] -= 1.5
+            case .complete where e.source == .reco: out[e.mid, default: 0] += 0.15
+            case .skip where e.source == .reco && e.ratio < earlySkipRatio: out[e.mid, default: 0] -= 0.6
+            default: break
+            }
+        }
+        return out
+    }
+
+    /// 证据来自哪里：某个公开歌单，或者某首歌的“相似歌曲”
+    static func origin(_ e: Evidence) -> String { e.via == .playlist ? "p:\(e.ref)" : "\(e.via.rawValue):\(e.seed)" }
+
+    /// 每个来源推荐过的歌的结果合在一起，好结果多就更信它，坏结果多就少信
+    static func reliability(evidence: [Evidence], outcomes: [String: Double]) -> [String: Double] {
+        var pos: [String: Double] = [:], neg: [String: Double] = [:]
+        var seen: Set<String> = []
+        for e in evidence {
+            guard let o = outcomes[e.mid], o != 0 else { continue }
+            let key = origin(e)
+            guard seen.insert("\(e.mid)|\(key)").inserted else { continue }
+            if o > 0 { pos[key, default: 0] += o } else { neg[key, default: 0] -= o }
+        }
+        var out: [String: Double] = [:]
+        for key in Set(pos.keys).union(neg.keys) {
+            out[key] = min(2, max(0.25, (2 + (pos[key] ?? 0)) / (2 + (neg[key] ?? 0))))
+        }
+        return out
+    }
+
+    // MARK: 打分
+
+    /// 打分要用到的东西，一次算好；单独拿出来是为了离线评估能直接给任意一首歌打分
+    struct Model {
+        var settings: RecoSettings
+        var tuning: RecoTuning
+        var now: Double
+        var affinity: OrderedMap<String, SongAffinity>
+        var profile: TasteProfile
+        /// 候选歌 → 证据强度
+        var raw: OrderedMap<String, Double>
+        /// 候选歌 → 被多少个公开歌单收录
+        var playlistCount: [String: Int]
+        var maxPlaylists: Int
+        /// 喜欢的歌里各种特殊版本占多少
+        var versionShare: [Version: Double]
+
+        init(_ input: RecoInput) {
+            settings = input.settings
+            tuning = input.tuning
+            now = input.now
+            affinity = RecoEngine.affinity(likedMids: input.likedMids, events: input.events, now: input.now)
+            profile = RecoEngine.profile(songs: input.songs, affinity: affinity)
+            let trust = tuning.reliability ? RecoEngine.reliability(evidence: input.evidence, outcomes: outcomes(input.events)) : [:]
+
+            var raw = OrderedMap<String, Double>()
+            var lists: [String: Set<String>] = [:]
+            for e in input.evidence {
+                let seedScore = affinity[e.seed]?.score ?? 0
+                if seedScore <= 0 { continue } // 种子歌已经不被喜欢了，这条证据作废
+                raw[e.mid, default: 0] += weight(e.via) * min(seedScore, 2) * (trust[origin(e)] ?? 1)
+                if e.via == .playlist { lists[e.mid, default: []].insert(e.ref) }
+            }
+            self.raw = raw
+            playlistCount = lists.mapValues(\.count)
+            maxPlaylists = max(1, playlistCount.values.max() ?? 1)
+
+            var share: [Version: Double] = [:]
+            var total = 0.0
+            for (mid, a) in affinity.pairs where a.score > 0 {
+                guard let s = input.songs[mid] else { continue }
+                total += 1
+                for v in versions(of: s.name) { share[v, default: 0] += 1 }
+            }
+            versionShare = total > 0 ? share.mapValues { $0 / total } : [:]
+        }
+
+        /// 这首歌在多大程度上是“熟悉的歌手”，0~1
+        func known(_ song: Song) -> Double { song.singers.reduce(0.0) { max($0, profile.artist[$1.key] ?? 0) } }
+
+        /// 不做任何过滤的分数；没有证据的歌返回 nil
+        func score(_ song: Song) -> Double? {
+            guard let raw = raw[song.mid] else { return nil }
+            let (t, settings) = (tuning, settings)
+            let relate = 1 - exp(-raw / 2)
+            let known = known(song)
+            let artist = t.quota ? t.artistWeight * known
+                : 0.6 * ((1 - settings.exploration) * known + settings.exploration * (1 - known))
+            let d = decade(of: song.publishTime)
+            let taste = t.language * (profile.language[song.language] ?? 0)
+                + t.genre * (profile.genre[song.genre] ?? 0)
+                + t.decade * (d.flatMap { profile.decade[$0] } ?? 0)
+            let fresh = published(song.publishTime).map { exp(-max(0, now - $0) / (365 * day)) } ?? 0
+            let rarity = 1 - log1p(Double(playlistCount[song.mid] ?? 0)) / log1p(Double(maxPlaylists))
+
+            var penalty = 0.0
+            if let a = affinity[song.mid], a.score < 0 { penalty += -a.score * 0.5 } // 这首歌自己被切过
+            penalty += song.singers.reduce(0.0) { max($0, profile.artistDislike[$1.key] ?? 0) } * 0.8
+            // 你很少听 Live、DJ、伴奏之类的版本，就少推这些
+            for v in versions(of: song.name) { penalty += t.version * max(0, 1 - (versionShare[v] ?? 0) / 0.05) }
+
+            return relate
+                + artist
+                + 0.6 * settings.tasteMatch * taste
+                + 0.8 * settings.freshness * fresh
+                // 以 0.5 为中点：往右偏冷门，往左偏热门
+                + 0.6 * (settings.obscurity - 0.5) * 2 * (rarity - 0.5)
+                - penalty
+        }
     }
 
     /// 第 3、4 步：给候选打分并选出一批
     public static func recommend(_ input: RecoInput) -> RecoResult {
-        let (songs, settings, now, random) = (input.songs, input.settings, input.now, input.random)
+        let (songs, settings, now) = (input.songs, input.settings, input.now)
+        let noise = { (mid: String) in input.seed.map { RecoEngine.noise(mid, $0) } ?? input.random() }
         let liked = Set(input.likedMids)
-        let affinity = affinity(likedMids: input.likedMids, events: input.events, now: now)
-        let profile = profile(songs: songs, affinity: affinity)
-
-        // 把证据按候选歌聚合
-        var aggs = OrderedMap<String, Aggregate>()
-        for e in input.evidence {
-            let seedScore = affinity[e.seed]?.score ?? 0
-            if seedScore <= 0 { continue } // 种子歌已经不被喜欢了，这条证据作废
-            aggs[e.mid, default: Aggregate()].raw += weight(e.via) * min(seedScore, 2)
-            if e.via == .playlist { aggs[e.mid, default: Aggregate()].playlists.insert(e.ref) }
-        }
-
-        // 热门程度的近似：一首歌被越多不同的公开歌单收录，就越大众
-        let maxPlaylists = max(1, aggs.values.map(\.playlists.count).max() ?? 1)
+        let model = Model(input)
+        let affinity = model.affinity
 
         // 已经喜欢或听过的歌（含它们的其他版本），不再当作“新歌”推荐；它们走“熟歌”通道
         var knownWorks: Set<String> = []
@@ -278,37 +428,16 @@ public enum RecoEngine {
         let allowed = { (s: Song) in input.playable(s) && (settings.languages?.contains(s.language) ?? true) }
         var scored: [Recommendation] = []
 
-        for (mid, g) in aggs.pairs {
+        for mid in model.raw.keys {
             guard let song = songs[mid] else { continue }
             let a = affinity[mid]
             if let a, a.blocked || a.coolUntil > now { continue }
             if liked.contains(mid) || (a?.plays ?? 0) > 0 || knownWorks.contains(workKey(song)) { continue }
             if !allowed(song) { continue }
-            if let last = input.recentlyRecommended[mid], last > 0, now - last < Double(settings.repeatCooldownDays) * day { continue }
-
-            let relate = 1 - exp(-g.raw / 2)
-            let known = song.singers.reduce(0.0) { max($0, profile.artist[$1.key] ?? 0) }
-            let artist = (1 - settings.exploration) * known + settings.exploration * (1 - known)
-            let d = decade(of: song.publishTime)
-            let taste = 0.5 * (profile.language[song.language] ?? 0)
-                + 0.25 * (profile.genre[song.genre] ?? 0)
-                + 0.25 * (d.flatMap { profile.decade[$0] } ?? 0)
-            let fresh = published(song.publishTime).map { exp(-max(0, now - $0) / (365 * day)) } ?? 0
-            let rarity = 1 - log1p(Double(g.playlists.count)) / log1p(Double(maxPlaylists))
-
-            var penalty = 0.0
-            if let a, a.score < 0 { penalty += -a.score * 0.5 } // 这首歌自己被切过
-            penalty += song.singers.reduce(0.0) { max($0, profile.artistDislike[$1.key] ?? 0) } * 0.8
-
-            let base = relate
-                + 0.6 * artist
-                + 0.6 * settings.tasteMatch * taste
-                + 0.8 * settings.freshness * fresh
-                // 以 0.5 为中点：往右偏冷门，往左偏热门
-                + 0.6 * (settings.obscurity - 0.5) * 2 * (rarity - 0.5)
-                - penalty
+            if !input.keep.contains(mid), let last = input.recentlyRecommended[mid], last > 0, now - last < Double(settings.repeatCooldownDays) * day { continue }
+            guard let base = model.score(song) else { continue }
             // 加一点随机扰动，让每一批不会一模一样
-            scored.append(Recommendation(song: song, score: base * (1 + 0.12 * (random() - 0.5)), kind: .new))
+            scored.append(Recommendation(song: song, score: base * (1 + 0.12 * (noise(mid) - 0.5)), kind: .new))
         }
         scored.sort { $0.score > $1.score }
 
@@ -331,14 +460,46 @@ public enum RecoEngine {
             return picked
         }
 
-        let fresh = take(scored, newCount)
-        let familiar = take(familiarPool(songs: songs, liked: liked, affinity: affinity, now: now, allowed: allowed, random: random), familiarCount)
-        return RecoResult(items: interleave(fresh, familiar), profile: profile, candidateCount: aggs.count)
+        var fresh: [Recommendation]
+        if input.tuning.quota {
+            // “探索”决定这一批里有多少名额留给没怎么听过的歌手，其余给熟悉的歌手；哪边不够就用另一边补
+            let explore = (Double(newCount) * min(1, max(0, settings.exploration))).jsRounded
+            let isNew = { (r: Recommendation) in model.known(r.song) < input.tuning.unknownBelow }
+            let familiarArtists = take(scored.filter { !isNew($0) }, newCount - explore)
+            let newArtists = take(scored.filter(isNew), explore)
+            fresh = blend(familiarArtists, newArtists)
+            fresh += take(scored, newCount - fresh.count)
+        } else {
+            fresh = take(scored, newCount)
+        }
+        let familiar = take(familiarPool(songs: songs, liked: liked, affinity: affinity, now: now, allowed: allowed, noise: noise), familiarCount)
+        return RecoResult(items: interleave(fresh, familiar), profile: model.profile, candidateCount: model.raw.count)
+    }
+
+    /// 由歌和种子决定的 0~1 之间的数
+    static func noise(_ mid: String, _ seed: UInt64) -> Double {
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325 ^ seed
+        for b in mid.utf8 { h = (h ^ UInt64(b)) &* 0x100_0000_01b3 }
+        h ^= h >> 33
+        h &*= 0xff51_afd7_ed55_8ccd
+        h ^= h >> 33
+        return Double(h >> 11) / Double(UInt64(1) << 53)
+    }
+
+    /// 按各自的长度比例交错合并两列，保持各自内部的先后
+    static func blend<T>(_ a: [T], _ b: [T]) -> [T] {
+        var out: [T] = []
+        var (i, j) = (0, 0)
+        while i < a.count || j < b.count {
+            let useA = j >= b.count || (i < a.count && (Double(i) + 0.5) / Double(a.count) <= (Double(j) + 0.5) / Double(b.count))
+            if useA { out.append(a[i]); i += 1 } else { out.append(b[j]); j += 1 }
+        }
+        return out
     }
 
     /// 熟歌通道：已经喜欢、或者反复听过的歌里，很久没听的那些；越久没听越靠前
     private static func familiarPool(
-        songs: [String: Song], liked: Set<String>, affinity: OrderedMap<String, SongAffinity>, now: Double, allowed: (Song) -> Bool, random: RandomSource
+        songs: [String: Song], liked: Set<String>, affinity: OrderedMap<String, SongAffinity>, now: Double, allowed: (Song) -> Bool, noise: (String) -> Double
     ) -> [Recommendation] {
         var out: [Recommendation] = []
         for (mid, a) in affinity.pairs {
@@ -346,7 +507,7 @@ public enum RecoEngine {
             guard let song = songs[mid], !a.blocked, a.coolUntil <= now, a.score >= (liked.contains(mid) ? 0.01 : 0.5), allowed(song) else { continue }
             let idleDays = a.lastPlayed > 0 ? (now - a.lastPlayed) / day : 365
             if idleDays < 7 { continue }
-            out.append(Recommendation(song: song, score: min(1, idleDays / 180) + 0.3 * a.score + 0.5 * random(), kind: .familiar))
+            out.append(Recommendation(song: song, score: min(1, idleDays / 180) + 0.3 * a.score + 0.5 * noise(mid), kind: .familiar))
         }
         return out.sorted { $0.score > $1.score }
     }

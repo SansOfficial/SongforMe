@@ -211,9 +211,12 @@ public struct Library: Sendable {
 
     /// 用当前设置生成一批推荐，并记下这批歌，冷却期内不再重复
     @concurrent
-    public func generateBatch(_ settings: RecoSettings) async throws -> RecoResult {
+    /// keep：重排当前这一批时，这批里的歌不受“最近推荐过”的限制
+    public func generateBatch(_ settings: RecoSettings, keep: Set<String> = [], seed: UInt64? = nil) async throws -> RecoResult {
         let now = nowMillis()
-        let input = try await recoInput(settings, now: now)
+        var input = try await recoInput(settings, now: now)
+        input.keep = keep
+        input.seed = seed
         let result = RecoEngine.recommend(input)
         var recent = input.recentlyRecommended.filter { $0.value > now - 90 * RecoEngine.day }
         for r in result.items where r.kind == .new { recent[r.song.mid] = now }

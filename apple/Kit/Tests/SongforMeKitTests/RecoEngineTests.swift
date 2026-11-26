@@ -167,3 +167,88 @@ struct RecommendTests {
         #expect(RecoEngine.published("") == nil)
     }
 }
+
+@Suite("推荐的细节")
+struct RecoDetailTests {
+    @Test("“探索”是名额：一半给陌生歌手、一半给熟悉歌手，交错排开；一边不够用另一边补")
+    func quota() {
+        let pool = [song("L1", "x"), song("L2", "y")] + (1...4).map { song("K\($0)", $0 % 2 == 0 ? "x" : "y") } + (1...4).map { song("N\($0)", "n\($0)") }
+        let evidence = (1...4).flatMap { [ev("K\($0)", "L1"), ev("N\($0)", "L1")] }
+        let half = run(pool, liked: ["L1", "L2"], evidence) { $0.batchSize = 4; $0.exploration = 0.5; $0.maxPerArtist = 5 }.mids
+        #expect(half.filter { $0.hasPrefix("N") }.count == 2)
+        #expect(half.filter { $0.hasPrefix("K") }.count == 2)
+        #expect(half[0].prefix(1) != half[1].prefix(1))
+        let none = run(pool, liked: ["L1", "L2"], evidence) { $0.batchSize = 4; $0.exploration = 0 }.mids
+        #expect(none.filter { $0.hasPrefix("K") }.count == 4)
+        // 陌生歌手只有 4 首，名额要 6 个时用熟悉歌手补满
+        let all = run(pool, liked: ["L1", "L2"], evidence) { $0.batchSize = 6; $0.exploration = 1; $0.maxPerArtist = 5 }.mids
+        #expect(all.count == 6 && all.prefix(4).allSatisfy { $0.hasPrefix("N") })
+    }
+
+    @Test("推荐出去被点了不喜欢的歌单，里面的其他歌排到后面")
+    func reliability() {
+        let pool = [song("L1", "x"), song("BAD1", "a"), song("GOOD1", "b"), song("C1", "c"), song("C2", "d")]
+        let evidence = [
+            ev("BAD1", "L1", .playlist, "bad"), ev("C1", "L1", .playlist, "bad"),
+            ev("GOOD1", "L1", .playlist, "good"), ev("C2", "L1", .playlist, "good"),
+        ]
+        let events = [event("BAD1", .play), event("BAD1", .dislike), event("GOOD1", .play), event("GOOD1", .like)]
+        let mids = run(pool, liked: ["L1", "GOOD1"], evidence, events: events) { $0.exploration = 1 }.mids
+        #expect(mids == ["C2", "C1"])
+        #expect(RecoEngine.reliability(evidence: evidence, outcomes: RecoEngine.outcomes(events))["p:bad"]! < 1)
+    }
+
+    @Test("很少听 Live、DJ 之类的版本时少推这些；喜欢的歌里常有就不扣分")
+    func versions() {
+        #expect(RecoEngine.versions(of: "七里香 (Live)") == [.live])
+        #expect(RecoEngine.versions(of: "晴天（DJ版）") == [.remix])
+        #expect(RecoEngine.versions(of: "后来 (0.8x)") == [.altered])
+        #expect(RecoEngine.versions(of: "Alive").isEmpty && RecoEngine.versions(of: "海阔天空").isEmpty)
+
+        let pool = [song("L1", "x", name: "甲"), song("L2", "x", name: "乙 (Live)"), song("A", "p", name: "丙 (Live)"), song("B", "q", name: "丁")]
+        let evidence = [ev("A", "L1"), ev("A", "L1", .playlist, "pl"), ev("B", "L1")]
+        #expect(run(pool, liked: ["L1"], evidence).mids.first == "B")
+        #expect(run(pool, liked: ["L1", "L2"], evidence).mids.first == "A")
+    }
+
+    @Test("重排当前这一批时，刚推荐过的这批歌照样能留下")
+    func keep() {
+        let pool = [song("L1", "x"), song("A", "p"), song("B", "q")]
+        let evidence = [ev("A", "L1"), ev("B", "L1")]
+        var s = RecoSettings()
+        s.familiarRatio = 0
+        var input = RecoInput(
+            songs: Dictionary(uniqueKeysWithValues: pool.map { ($0.mid, $0) }), likedMids: ["L1"], events: [], evidence: evidence,
+            recentlyRecommended: ["A": NOW, "B": NOW], settings: s, now: NOW, random: { 0.5 }
+        )
+        #expect(RecoEngine.recommend(input).items.isEmpty)
+        input.keep = ["A"]
+        #expect(RecoEngine.recommend(input).items.map(\.song.mid) == ["A"])
+    }
+
+    @Test("给了种子时扰动按歌固定：去掉一首，其余的先后不变")
+    func seeded() {
+        let pool = [song("L1", "x")] + (1...12).map { song("C\($0)", "a\($0)") }
+        let evidence = (1...12).map { ev("C\($0)", "L1") }
+        func order(_ drop: Set<String>, random: Double) -> [String] {
+            var s = RecoSettings()
+            s.familiarRatio = 0
+            var input = RecoInput(
+                songs: Dictionary(uniqueKeysWithValues: pool.filter { !drop.contains($0.mid) }.map { ($0.mid, $0) }), likedMids: ["L1"], events: [],
+                evidence: evidence, settings: s, now: NOW, random: { random }
+            )
+            input.seed = 42
+            return RecoEngine.recommend(input).items.map(\.song.mid)
+        }
+        let all = order([], random: 0.1)
+        #expect(Set(all).count == 12 && all != (1...12).map { "C\($0)" })
+        #expect(order(["C3"], random: 0.9) == all.filter { $0 != "C3" })
+    }
+
+    @Test("按比例交错合并")
+    func blend() {
+        #expect(RecoEngine.blend([1, 2, 3, 4], [9, 8]) == [1, 9, 2, 3, 8, 4])
+        #expect(RecoEngine.blend([1, 2], []) == [1, 2])
+        #expect(RecoEngine.blend([], [7]) == [7])
+    }
+}

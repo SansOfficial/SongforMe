@@ -71,6 +71,26 @@ final class PlayerTests {
         #expect(log.filter { $0.mid == "m0" }.map(\.type) == [.play, .complete, .play, .skip])
     }
 
+    @Test("换掉还没放的歌：放过的和正在放的不动，正在放的不打断")
+    func replaceUpcoming() async {
+        p.setQueue(items(4))
+        await settle()
+        p.next()
+        await settle()
+        p.replaceUpcoming([item("m0"), item("m1"), item("x1"), item("x2")])
+        await settle()
+        #expect(mids == ["m0", "m1", "x1", "x2"])
+        #expect(now == "m1" && p.playing)
+        #expect(log.filter { $0.mid == "m1" }.map(\.type) == [.play])
+        p.next()
+        await settle()
+        #expect(now == "x1")
+        // 关掉随机再打开，换进来的歌也还在
+        p.setShuffle(.on)
+        p.setShuffle(.off)
+        #expect(Set(mids) == ["m0", "m1", "x1", "x2"])
+    }
+
     @Test("列表循环回到开头，不循环则停下")
     func repeatAll() async {
         p.setRepeat(.all)

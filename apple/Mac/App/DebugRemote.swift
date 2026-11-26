@@ -80,6 +80,14 @@ enum DebugRemote {
                 Task { if let e = await app.saveSettings(s, Dictionary(pairs.map { ($0[0], $0[1]) }, uniquingKeysWith: { $1 })) { app.say(e, error: true) } }
             }
         case "generate": Task { await app.generate() }
+        case "play-batch": app.playBatch()
+        case "update": Task { await Updater.shared.install() }
+        case "dislike-current": if let s = app.player.current?.song { app.reject(s, .dislike) }
+        case "like-current": if let s = app.player.current?.song { app.toggleLike(s) }
+        case "batch":
+            let p = app.player
+            let text = "index=\(p.index) context=\(p.context)\nbatch=\(app.batch.map(\.song.name).joined(separator: ","))\nqueue=\(p.queue.map(\.song.name).joined(separator: ","))"
+            try? text.write(toFile: arg, atomically: true, encoding: .utf8)
         case "play": app.playList()
         case "toggle": app.togglePlay()
         case "mute": app.player.toggleMute()

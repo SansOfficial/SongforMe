@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import SwiftUI
 import SongforMeKit
 
 struct ArtistRef: Hashable {
@@ -119,6 +120,9 @@ final class AppModel {
     @ObservationIgnored private var announceSmart = false
     /// 在报告里翻页时用同一份数据，离开报告就丢掉
     @ObservationIgnored private var reportInput: ReportInput?
+    /// 这一批推荐的随机种子：跟着反馈重排时没受影响的歌名次不乱跳
+    @ObservationIgnored private var batchSeed = UInt64.random(in: 1...UInt64.max)
+    @ObservationIgnored private var reshapeTask: Task<Void, Never>?
 
     private static let artistPage = 60
 
@@ -139,7 +143,12 @@ final class AppModel {
                 if await source.account().loggedIn { return nil }
                 throw SourceError("登录\(source.info.spaced)后才能播放", needsLogin: true)
             },
-            log: { event in Task { try? await store.addEvents([event]) } }
+            log: { event in
+                Task {
+                    try? await store.addEvents([event])
+                    AppModel.shared.heard(event)
+                }
+            }
         )
         lyrics = LyricsModel(hub: hub, player: player)
         nowPlaying = NowPlaying(player: player)
@@ -194,7 +203,10 @@ final class AppModel {
         settings = await library.loadSettings()
         syncLikes = await read("syncLikes") ?? true
         player.restore(await read("playback") ?? PlaybackPrefs())
-        if let saved: SavedBatch = await read("lastBatch") { batch = saved.items }
+        if let saved: SavedBatch = await read("lastBatch") {
+            batch = saved.items
+            if let seed = saved.seed { batchSeed = seed }
+        }
         searchSource = await read("searchSource") ?? ""
         let found = await shelf.load()
         for s in found.sources where sources.named(s.info.id) == nil {
@@ -207,10 +219,14 @@ final class AppModel {
         await refreshLibrary()
         await refreshAccounts()
         ready = true
+        Updater.shared.start()
         if let bad = found.failed.first { say("有插件没有载入，\(bad)", error: true) }
     }
 
-    private nonisolated struct SavedBatch: Codable { var items: [Recommendation] }
+    private nonisolated struct SavedBatch: Codable {
+        var items: [Recommendation]
+        var seed: UInt64?
+    }
     private nonisolated struct SavedAccount: Codable {
         var uin: String
         var profile: AccountProfile
@@ -384,10 +400,45 @@ final class AppModel {
     }
 
     private func produce() async throws -> RecoResult {
-        let result = try await library.generateBatch(settings)
+        reshapeTask?.cancel()
+        let seed = UInt64.random(in: 1...UInt64.max)
+        let result = try await library.generateBatch(settings, seed: seed)
         batch = result.items
-        await write("lastBatch", SavedBatch(items: result.items))
+        batchSeed = seed
+        await write("lastBatch", SavedBatch(items: result.items, seed: seed))
         return result
+    }
+
+    /// 正在听这一批推荐时，点了喜欢 / 不喜欢 / 听腻了，或者很快切掉一首，后面还没放的歌跟着重排
+    func heard(_ event: PlayEvent) {
+        let strong = switch event.type {
+        case .like, .unlike, .dislike, .tired: true
+        case .skip: event.source == .reco && event.ratio < RecoEngine.earlySkipRatio
+        default: false
+        }
+        guard strong, player.context == Self.recoContext, !batch.isEmpty else { return }
+        // 连着切好几首时等手停下来再算
+        reshapeTask?.cancel()
+        reshapeTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { await reshapeBatch() }
+        }
+    }
+
+    private func reshapeBatch() async {
+        let before = Set(player.queue.prefix(player.index + 1).map(\.song.mid))
+        var s = settings
+        s.batchSize = max(0, settings.batchSize - batch.count { before.contains($0.song.mid) })
+        guard s.batchSize > 0, let result = try? await library.generateBatch(s, keep: Set(batch.map(\.song.mid)), seed: batchSeed),
+              !Task.isCancelled, player.context == Self.recoContext else { return }
+        // 算的这一会儿可能又放到了下一首
+        let played = Set(player.queue.prefix(player.index + 1).map(\.song.mid))
+        let rest = result.items.filter { !played.contains($0.song.mid) }
+        let next = batch.filter { played.contains($0.song.mid) } + rest
+        if next.map(\.id) == batch.map(\.id) { return }
+        withAnimation(.smooth) { batch = next }
+        player.replaceUpcoming(rest.map { QueueItem(song: $0.song, source: $0.kind == .new ? .reco : .library) })
+        await write("lastBatch", SavedBatch(items: next, seed: batchSeed))
     }
 
     /// 生成一批推荐；候选不够时先自动扩充
@@ -592,9 +643,11 @@ final class AppModel {
     // MARK: 播放
 
     /// mid 为 nil：没有指定从哪首开始（点的是“播放”按钮）
+    static let recoContext = "reco"
+
     func playBatch(from mid: String? = nil) {
         let items = batch.map { QueueItem(song: $0.song, source: $0.kind == .new ? .reco : .library) }
-        player.setQueue(items, startIndex: mid.flatMap { m in items.firstIndex { $0.song.mid == m } }, context: "reco")
+        player.setQueue(items, startIndex: mid.flatMap { m in items.firstIndex { $0.song.mid == m } }, context: Self.recoContext)
     }
 
     func playList(from mid: String? = nil) {
@@ -730,8 +783,10 @@ final class AppModel {
         } else {
             try? await store.removeMember(song.mid, from: id)
         }
-        try? await store.addEvents([PlayEvent(mid: song.mid, type: liked ? .like : .unlike, ratio: 0, source: .reco, ts: nowMillis())])
+        let event = PlayEvent(mid: song.mid, type: liked ? .like : .unlike, ratio: 0, source: .reco, ts: nowMillis())
+        try? await store.addEvents([event])
         await refreshLibrary()
+        heard(event)
     }
 
     /// 点爱心：本地立刻生效，同时在后台同步到账号的“我喜欢”；同步失败会撤回本地的改动
@@ -786,7 +841,11 @@ final class AppModel {
 
     /// 不喜欢：永不再推荐；听腻了：一个半月内不再出现
     func reject(_ song: Song, _ type: EventType) {
-        Task { try? await store.addEvents([PlayEvent(mid: song.mid, type: type, ratio: 0, source: .reco, ts: nowMillis())]) }
+        let event = PlayEvent(mid: song.mid, type: type, ratio: 0, source: .reco, ts: nowMillis())
+        Task {
+            try? await store.addEvents([event])
+            heard(event)
+        }
         batch.removeAll { $0.song.mid == song.mid }
         player.remove(song.mid)
         say(type == .dislike ? "不会再推荐这首歌" : "这首歌会休息一个半月")

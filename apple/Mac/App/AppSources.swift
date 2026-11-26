@@ -85,7 +85,7 @@ extension AppModel {
     }
 
     /// 挂在窗口上问，不用 runModal：那会占住主线程，弹着的时候歌放完了也切不了
-    private func ask(_ title: String, _ text: String, button: String) async -> Bool {
+    func ask(_ title: String, _ text: String, button: String) async -> Bool {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text

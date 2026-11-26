@@ -6,6 +6,9 @@ import SongforMeKit
 class SourcePack: NSObject {
     class func sources() -> [any MusicSource] { [] }
 
+    /// 编译时带上了本机音源
+    static var bundled: Bool { NSClassFromString("SongforMeSourcePack") != nil }
+
     static func installed() -> SourceHub {
         let pack = NSClassFromString("SongforMeSourcePack") as? SourcePack.Type
         return SourceHub(pack?.sources() ?? [])
