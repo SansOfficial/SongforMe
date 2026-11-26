@@ -125,6 +125,10 @@ private struct DesktopLyricsView: View {
                 .fill(Color(white: 0.07).opacity(hovering ? 0.62 : 0.001))
                 .strokeBorder(.white.opacity(hovering ? 0.14 : 0))
         }
+        // 窗口里是 SwiftUI，按住背景拖不动窗口，要自己加拖动手势；应用在后台时第一下也要能拖
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .gesture(WindowDragGesture())
+        .allowsWindowActivationEvents(true)
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 2) {
                 IconButton(icon: "textformat.size.smaller", label: "字小一点", size: 12) { resize(-2) }
