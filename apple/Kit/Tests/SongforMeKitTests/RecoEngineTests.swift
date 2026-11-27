@@ -198,6 +198,38 @@ struct RecoDetailTests {
         #expect(RecoEngine.reliability(evidence: evidence, outcomes: RecoEngine.outcomes(events))["p:bad"]! < 1)
     }
 
+    @Test("一个公开歌单只算一票：几百首的热歌合集里收了好几首你喜欢的歌，也比不过一条“相似歌曲”")
+    func listVote() {
+        let liked = (1...5).map { "L\($0)" }
+        let filler = (1...300).map { song("F\($0)", "f\($0)") }
+        let pool = liked.map { song($0, "x") } + [song("BIG", "a"), song("SIM", "b")] + filler
+        // BIG 在一个 300 多首的合集里，合集里有 5 首你喜欢的歌；SIM 是其中一首的相似歌曲
+        let big = (["BIG"] + filler.map(\.mid)).flatMap { m in liked.map { ev(m, $0, .playlist, "hits") } }
+        let mids = run(pool, liked: liked, big + [ev("SIM", "L1")]) { $0.exploration = 1; $0.batchSize = 3 }.mids
+        #expect(mids.first == "SIM")
+    }
+
+    @Test("陌生歌手的推荐总被嫌弃、熟悉歌手的常被喜欢时，自动少给陌生歌手名额")
+    func adaptExplore() {
+        let pool = [song("L1", "x"), song("L2", "y")] + (1...6).map { song("K\($0)", $0 % 2 == 0 ? "x" : "y") }
+            + (1...6).map { song("N\($0)", "n\($0)") } + (1...6).map { song("D\($0)", "d\($0)") } + (1...3).map { song("G\($0)", "x") }
+        let evidence = (1...6).flatMap { [ev("K\($0)", "L1"), ev("N\($0)", "L1")] }
+        let half = { (events: [PlayEvent]) in run(pool, liked: ["L1", "L2"], evidence, events: events) { $0.batchSize = 6; $0.exploration = 0.5; $0.maxPerArtist = 9 }.mids }
+        #expect(half([]).filter { $0.hasPrefix("N") }.count == 3)
+        // 推荐过 6 首陌生歌手的歌全被点了不喜欢，3 首熟悉歌手的被点了喜欢
+        let feedback = (1...6).flatMap { [event("D\($0)", .play), event("D\($0)", .dislike)] } + (1...3).map { event("G\($0)", .like) }
+        #expect(half(feedback).filter { $0.hasPrefix("N") }.count <= 1)
+    }
+
+    @Test("挑陌生歌手时，被很多公开歌单收录的成名歌手排在只火了一首的网络歌前面")
+    func depth() {
+        let pool = [song("L1", "x"), song("NET", "net"), song("STAR", "star")] + (1...8).map { song("S\($0)", "star") }
+        // NET 的证据更强一点，但它的歌手只出现在一个歌单里；STAR 的歌手出现在 8 个歌单里
+        let evidence = [ev("NET", "L1", .playlist, "p0"), ev("NET", "L1"), ev("STAR", "L1")] + (1...8).map { ev("S\($0)", "L1", .playlist, "p\($0)") }
+        let mids = run(pool, liked: ["L1"], evidence) { $0.exploration = 1; $0.batchSize = 2; $0.maxPerArtist = 1 }.mids
+        #expect(mids == ["STAR", "NET"])
+    }
+
     @Test("很少听 Live、DJ 之类的版本时少推这些；喜欢的歌里常有就不扣分")
     func versions() {
         #expect(RecoEngine.versions(of: "七里香 (Live)") == [.live])

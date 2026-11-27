@@ -157,6 +157,7 @@ struct RecoEval {
         with("+版本类型") { $0.version = 0.4 }
         with("+年代加重") { $0.genre = 0.1; $0.decade = 0.4 }
         with("+探索改名额") { $0.quota = true }
+        with("+歌单一票") { $0.listVote = true }
         configs.append(("全部", RecoTuning()))
         func without(_ name: String, _ f: (inout RecoTuning) -> Void) {
             var t = RecoTuning()
@@ -166,16 +167,24 @@ struct RecoEval {
         without("全部−来源靠谱度") { $0.reliability = false }
         without("全部−探索改名额") { $0.quota = false }
         without("全部−年代加重") { $0.genre = 0.25; $0.decade = 0.25 }
-        for v in (ProcessInfo.processInfo.environment["SONGFORME_EVAL_GRID"] ?? "").split(separator: ";").map({ $0.split(separator: "=") }) where v.count == 2 {
-            let (k, x) = (v[0], Double(v[1]) ?? 0)
+        without("全部−歌单一票") { $0.listVote = false }
+        // 例：SONGFORME_EVAL_GRID="decade=0.3;listVote=1,playSeed=0.5"，分号隔开几组，每组里逗号隔开几项
+        for group in (ProcessInfo.processInfo.environment["SONGFORME_EVAL_GRID"] ?? "").split(separator: ";") {
             var t = RecoTuning()
-            switch k {
-            case "decade": t.decade = x
-            case "version": t.version = x
-            case "artist": t.artistWeight = x
-            default: continue
+            for v in group.split(separator: ",").map({ $0.split(separator: "=") }) where v.count == 2 {
+                let (k, x) = (v[0], Double(v[1]) ?? 0)
+                switch k {
+                case "decade": t.decade = x
+                case "version": t.version = x
+                case "artist": t.artistWeight = x
+                case "listVote": t.listVote = x > 0
+                case "listFull": t.listVote = true; t.listFull = x
+                case "adapt": t.adaptExplore = x > 0
+                case "depth": t.depth = x
+                default: continue
+                }
             }
-            configs.append(("全部 \(k)=\(x)", t))
+            configs.append(("全部 \(group)", t))
         }
 
         func f(_ x: Double) -> String { String(format: "%.3f", x) }

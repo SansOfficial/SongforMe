@@ -137,9 +137,21 @@ struct RecoTuning: Sendable {
     var language = 0.5, genre = 0.1, decade = 0.4
     /// 很少听的特殊版本扣多少分
     var version = 0.4
+    /// 一个公开歌单对一首歌只算一票（以前里面有几首你喜欢的歌就算几票，几百首的热歌合集能把整张单子顶上来），
+    /// 而且歌单越大这一票越轻
+    var listVote = true
+    /// 不超过这么多首的歌单，这一票算满
+    var listFull = 100.0
+    /// 陌生歌手的推荐总被嫌弃时，自动少给陌生歌手名额
+    var adaptExplore = true
+    /// 挑陌生歌手时，被越多公开歌单收录的（成名歌手）越靠前，少挑只火了一首的网络歌
+    var depth = 0.3
 
     /// 改动之前的算法
-    static let baseline = RecoTuning(reliability: false, quota: false, language: 0.5, genre: 0.25, decade: 0.25, version: 0)
+    static let baseline = RecoTuning(
+        reliability: false, quota: false, language: 0.5, genre: 0.25, decade: 0.25, version: 0, listVote: false, adaptExplore: false, depth: 0
+    )
+
 }
 
 public struct RecoResult: Sendable {
@@ -347,6 +359,10 @@ public enum RecoEngine {
         var maxPlaylists: Int
         /// 喜欢的歌里各种特殊版本占多少
         var versionShare: [Version: Double]
+        /// 歌手（Singer.key）→ 被多少个公开歌单收录过
+        var artistLists: [String: Int]
+        /// 探索名额打几折：陌生歌手的推荐结果比熟悉歌手的差得越多，给得越少
+        var exploreFactor = 1.0
 
         init(_ input: RecoInput) {
             settings = input.settings
@@ -358,11 +374,24 @@ public enum RecoEngine {
 
             var raw = OrderedMap<String, Double>()
             var lists: [String: Set<String>] = [:]
+            /// （歌，歌单）→ 这个歌单里你喜欢的歌加起来多少分；歌单 → 收了多少首候选
+            var votes = OrderedMap<Pair, Double>()
+            var listSize: [String: Set<String>] = [:]
             for e in input.evidence {
                 let seedScore = affinity[e.seed]?.score ?? 0
                 if seedScore <= 0 { continue } // 种子歌已经不被喜欢了，这条证据作废
-                raw[e.mid, default: 0] += weight(e.via) * min(seedScore, 2) * (trust[origin(e)] ?? 1)
                 if e.via == .playlist { lists[e.mid, default: []].insert(e.ref) }
+                if tuning.listVote, e.via == .playlist {
+                    votes[Pair(mid: e.mid, ref: e.ref), default: 0] += min(seedScore, 2)
+                    listSize[e.ref, default: []].insert(e.mid)
+                    raw[e.mid, default: 0] += 0 // 先占住先后顺序
+                } else {
+                    raw[e.mid, default: 0] += weight(e.via) * min(seedScore, 2) * (trust[origin(e)] ?? 1)
+                }
+            }
+            for (k, v) in votes.pairs {
+                let size = Double(listSize[k.ref]?.count ?? 1)
+                raw[k.mid, default: 0] += weight(.playlist) * min(v, 2) * min(1, (tuning.listFull / size).squareRoot()) * (trust["p:\(k.ref)"] ?? 1)
             }
             self.raw = raw
             playlistCount = lists.mapValues(\.count)
@@ -376,7 +405,33 @@ public enum RecoEngine {
                 for v in versions(of: s.name) { share[v, default: 0] += 1 }
             }
             versionShare = total > 0 ? share.mapValues { $0 / total } : [:]
+
+            var artistRefs: [String: Set<String>] = [:]
+            for e in input.evidence where e.via == .playlist {
+                for g in input.songs[e.mid]?.singers ?? [] { artistRefs[g.key, default: []].insert(e.ref) }
+            }
+            artistLists = artistRefs.mapValues(\.count)
+
+            if tuning.adaptExplore {
+                // 推荐出去的歌按歌手熟不熟分两边，各自算“好结果 / 坏结果”的比值
+                var pos = [0.0, 0.0], neg = [0.0, 0.0]
+                for (mid, o) in outcomes(input.events.filter { $0.source == .reco || $0.type == .dislike }) {
+                    guard let song = input.songs[mid] else { continue }
+                    let i = known(song) < tuning.unknownBelow ? 1 : 0
+                    if o > 0 { pos[i] += o } else { neg[i] -= o }
+                }
+                let rate = { (i: Int) in (2 + pos[i]) / (2 + neg[i]) }
+                exploreFactor = min(1, max(0.15, rate(1) / rate(0)))
+            }
         }
+
+        /// 歌手有多“成名”：被多少个公开歌单收录，0~1
+        func depth(_ song: Song) -> Double {
+            let n = song.singers.map { artistLists[$0.key] ?? 0 }.max() ?? 0
+            return min(1, log1p(Double(n)) / log1p(15))
+        }
+
+        struct Pair: Hashable { var mid, ref: String }
 
         /// 这首歌在多大程度上是“熟悉的歌手”，0~1
         func known(_ song: Song) -> Double { song.singers.reduce(0.0) { max($0, profile.artist[$1.key] ?? 0) } }
@@ -463,10 +518,12 @@ public enum RecoEngine {
         var fresh: [Recommendation]
         if input.tuning.quota {
             // “探索”决定这一批里有多少名额留给没怎么听过的歌手，其余给熟悉的歌手；哪边不够就用另一边补
-            let explore = (Double(newCount) * min(1, max(0, settings.exploration))).jsRounded
+            let explore = (Double(newCount) * min(1, max(0, settings.exploration)) * model.exploreFactor).jsRounded
             let isNew = { (r: Recommendation) in model.known(r.song) < input.tuning.unknownBelow }
             let familiarArtists = take(scored.filter { !isNew($0) }, newCount - explore)
-            let newArtists = take(scored.filter(isNew), explore)
+            // 陌生歌手里先挑成名歌手的歌
+            let unknown = scored.filter(isNew).map { ($0, $0.score + input.tuning.depth * model.depth($0.song)) }
+            let newArtists = take(unknown.sorted { $0.1 > $1.1 }.map(\.0), explore)
             fresh = blend(familiarArtists, newArtists)
             fresh += take(scored, newCount - fresh.count)
         } else {
