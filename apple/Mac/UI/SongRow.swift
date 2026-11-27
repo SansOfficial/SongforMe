@@ -92,6 +92,9 @@ struct SongMenu: View {
 
     var body: some View {
         if let play { Button("播放", systemImage: "play", action: play) }
+        Button("下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward") { app.enqueue(song, next: true) }
+        Button("加到播放队列", systemImage: "text.append") { app.enqueue(song, next: false) }
+        Divider()
         Button(app.hearts.contains(song.mid) ? "取消喜欢" : "喜欢", systemImage: "heart") { app.toggleLike(song) }
         if app.canEditPlaylists(for: song) {
             Menu("加入歌单", systemImage: "plus") {

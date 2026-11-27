@@ -166,6 +166,91 @@ final class PlayerTests {
         #expect(log.map(\.type) == [.play])
     }
 
+    @Test("下一首播放：接在正在放的后面，同一首不会出现两次，关掉随机也还在原位")
+    func playNext() async {
+        p.setQueue(items(4))
+        await settle()
+        p.playNext([item("m3")])
+        p.playNext([item("x")])
+        #expect(mids == ["m0", "x", "m3", "m1", "m2"])
+        #expect(now == "m0" && p.playing)
+        p.setShuffle(.on)
+        p.setShuffle(.off)
+        #expect(mids == ["m0", "x", "m3", "m1", "m2"])
+        p.next()
+        await settle()
+        #expect(now == "x")
+    }
+
+    @Test("加到队列：放到最后；队列空着就直接开始放")
+    func enqueue() async {
+        p.enqueue([item("a")])
+        await settle()
+        #expect(now == "a" && p.playing)
+        p.enqueue([item("b"), item("c")])
+        p.enqueue([item("b")])
+        #expect(mids == ["a", "c", "b"])
+        #expect(now == "a")
+    }
+
+    @Test("拖动调整还没放的歌的顺序")
+    func moveUpcoming() async {
+        p.setQueue(items(5))
+        await settle()
+        p.next()
+        await settle()
+        // 后面是 m2 m3 m4，把 m4 拖到最前面
+        p.moveUpcoming(fromOffsets: [2], toOffset: 0)
+        #expect(mids == ["m0", "m1", "m4", "m2", "m3"])
+        // 把 m4 拖到最后
+        p.moveUpcoming(fromOffsets: [0], toOffset: 3)
+        #expect(mids == ["m0", "m1", "m2", "m3", "m4"])
+        p.moveUpcoming(fromOffsets: [0, 1], toOffset: 3)
+        #expect(mids == ["m0", "m1", "m4", "m2", "m3"])
+        #expect(now == "m1")
+        p.setShuffle(.on)
+        p.setShuffle(.off)
+        #expect(mids == ["m0", "m1", "m4", "m2", "m3"])
+    }
+
+    @Test("放完这首后停：停在下一首上不出声，再按播放从下一首开始")
+    func stopAfterCurrent() async {
+        var stopped = 0
+        p.onStopped = { stopped += 1 }
+        p.setQueue(items(3))
+        await settle()
+        p.stopAfterCurrent = true
+        audio.end()
+        await settle()
+        #expect(now == "m1")
+        #expect(!p.playing && !p.loading)
+        #expect(!p.stopAfterCurrent)
+        #expect(stopped == 1)
+        #expect(audio.urls == ["x://m0"])
+        p.toggle()
+        await settle()
+        #expect(now == "m1" && p.playing)
+        // 下一首照常接着放
+        audio.end()
+        await settle()
+        #expect(now == "m2" && p.playing)
+    }
+
+    @Test("单曲循环时放完这首后停：回到开头停下")
+    func stopAfterCurrentRepeatOne() async {
+        p.setRepeat(.one)
+        p.setQueue(items(2))
+        await settle()
+        p.stopAfterCurrent = true
+        audio.end()
+        await settle()
+        #expect(now == "m0")
+        #expect(!p.playing)
+        p.toggle()
+        await settle()
+        #expect(now == "m0" && p.playing)
+    }
+
     @Test("移除的歌关掉随机之后不会回来")
     func removed() async {
         p.setShuffle(.on)

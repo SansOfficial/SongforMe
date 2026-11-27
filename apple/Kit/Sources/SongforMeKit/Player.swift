@@ -158,6 +158,10 @@ public final class Player {
         case .ended:
             if let cur = current, started { record(cur, .complete, 1) }
             endListen()
+            if stopAfterCurrent {
+                stopAfterCurrent = false
+                hold = true
+            }
             advance(auto: true)
         case .failed:
             // 播放地址有时效，中途失效时重新取一次
@@ -310,9 +314,100 @@ public final class Player {
         }
     }
 
+    // MARK: 插队、排序
+
+    /// 接在正在放的这首后面放。队列里还没放到的同一首会挪过来，不会出现两次；队列是空的就直接开始放
+    public func playNext(_ items: [QueueItem]) {
+        guard !items.isEmpty else { return }
+        guard current != nil else { return start(items) }
+        let cur = current
+        let mids = Set(items.map(\.song.mid))
+        dropUpcoming(mids)
+        queue.insert(contentsOf: items, at: index + 1)
+        // 关掉随机时按原来的顺序排，这几首也要紧跟在正在放的这首后面
+        let anchor = cur.flatMap { origin.firstIndex(of: $0) }
+            ?? queue[..<index].last { !$0.extra }.flatMap { origin.firstIndex(of: $0) }
+        origin.insert(contentsOf: items, at: anchor.map { $0 + 1 } ?? 0)
+        epoch += 1
+    }
+
+    /// 加到队列最后
+    public func enqueue(_ items: [QueueItem]) {
+        guard !items.isEmpty else { return }
+        guard current != nil else { return start(items) }
+        dropUpcoming(Set(items.map(\.song.mid)))
+        queue += items
+        origin += items
+        epoch += 1
+    }
+
+    /// 调整还没放的歌的顺序。offsets 和 to 都从正在放的下一首算起
+    public func moveUpcoming(fromOffsets offsets: IndexSet, toOffset to: Int) {
+        let base = index + 1
+        var rest = Array(queue[base...])
+        let moving = offsets.filter { rest.indices.contains($0) }.map { rest[$0] }
+        guard !moving.isEmpty else { return }
+        let target = to - offsets.count { $0 < to }
+        rest = rest.indices.filter { !offsets.contains($0) }.map { rest[$0] }
+        rest.insert(contentsOf: moving, at: min(max(0, target), rest.count))
+        queue = Array(queue[..<base]) + rest
+        if prefs.shuffle == .off { origin = queue.filter { !$0.extra } }
+        epoch += 1
+    }
+
+    /// 队列空着的时候插队，就把这几首当成新的队列来放
+    private func start(_ items: [QueueItem]) {
+        settleCurrent()
+        origin = items
+        queue = items
+        context = ""
+        index = -1
+        epoch += 1
+        playAt(0, settle: false)
+    }
+
+    /// 拿掉还没放到的这些歌（正在放的和放过的不动）
+    private func dropUpcoming(_ mids: Set<String>) {
+        let keep = Set(queue.prefix(index + 1).map(\.id))
+        queue = Array(queue.prefix(index + 1)) + queue.dropFirst(index + 1).filter { !mids.contains($0.song.mid) }
+        origin.removeAll { mids.contains($0.song.mid) && !keep.contains($0.id) }
+    }
+
+    // MARK: 睡眠定时
+
+    /// 放完这首就停。停下时已经换到下一首，再按播放从下一首开始
+    public var stopAfterCurrent = false {
+        didSet { if stopAfterCurrent != oldValue { onChange?() } }
+    }
+    /// 这首放完、该停的时候置上，接下来那次换歌只摆好不出声
+    @ObservationIgnored private var hold = false
+    /// 放完这首停下之后通知外面
+    @ObservationIgnored public var onStopped: (() -> Void)?
+
+    /// 停在第 i 首：显示出来，但不取地址、不出声，按播放时才开始
+    private func cue(_ i: Int) {
+        ticket += 1
+        loadTask?.cancel()
+        audio.pause()
+        loaded = false
+        lastTick = nil
+        index = i
+        loading = false
+        playing = false
+        position = 0
+        duration = queue[i].song.duration
+        error = nil
+        onChange?()
+        onStopped?()
+    }
+
     public func playAt(_ i: Int, settle: Bool = true) {
         if settle { settleCurrent() }
+        let hold = self.hold
+        self.hold = false
+        if hold, queue.indices.contains(i) { return cue(i) }
         guard queue.indices.contains(i) else {
+            if hold { onStopped?() }
             ticket += 1
             audio.pause()
             playing = false
@@ -329,7 +424,14 @@ public final class Player {
         if auto, prefs.repeat == .one, loaded {
             retried = false
             audio.seek(0)
-            audio.play()
+            position = 0
+            if hold {
+                hold = false
+                audio.pause()
+                onStopped?()
+            } else {
+                audio.play()
+            }
             return
         }
         // 已经知道放不了的歌直接跳过

@@ -64,6 +64,7 @@ struct PlaybackCommands: Commands {
             Picker("播放方式", selection: Binding { app.playMode } set: { app.setPlayMode($0) }) {
                 ForEach(app.playModes, id: \.self) { Text($0.title).tag($0) }
             }
+            Menu("睡眠定时") { SleepMenu() }
             Divider()
             Button("喜欢 / 取消喜欢") { if let s = app.player.current?.song { app.toggleLike(s) } }.keyboardShortcut("l").disabled(app.player.current == nil)
             Divider()

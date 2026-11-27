@@ -6,6 +6,7 @@ import WebKit
 extension Notification.Name {
     static let debugStory = Notification.Name("debugStory")
     static let debugPanel = Notification.Name("debugPanel")
+    static let debugQueue = Notification.Name("debugQueue")
     static let debugPoster = Notification.Name("debugPoster")
 }
 
@@ -92,6 +93,23 @@ enum DebugRemote {
             let text = "index=\(p.index) context=\(p.context)\nbatch=\(app.batch.map(\.song.name).joined(separator: ","))\nqueue=\(p.queue.map(\.song.name).joined(separator: ","))"
             try? text.write(toFile: arg, atomically: true, encoding: .utf8)
         case "play": app.playList()
+        case "local-add":
+            Task {
+                await app.local.add(URL(filePath: arg))
+                await app.addedLocal()
+            }
+        case "local-remove": if let f = app.localFolders.first { Task { await app.removeLocalFolder(f) } }
+        case "queue-next": if let s = app.content.songs.dropFirst(Int(arg) ?? 0).first { app.enqueue(s, next: true) }
+        case "queue-add": if let s = app.content.songs.dropFirst(Int(arg) ?? 0).first { app.enqueue(s, next: false) }
+        case "queue-move": app.player.moveUpcoming(fromOffsets: [0], toOffset: Int(arg) ?? 1)
+        case "queue": NotificationCenter.default.post(name: .debugQueue, object: nil)
+        case "sleep":
+            switch arg {
+            case "song": SleepTimer.shared.stopAfterSong()
+            case "off": SleepTimer.shared.cancel()
+            default: SleepTimer.shared.set(minutes: Int(arg) ?? 30)
+            }
+        case "end": app.player.seek(max(0, app.player.duration - 1))
         case "toggle": app.togglePlay()
         case "mute": app.player.toggleMute()
         case "mode": app.cyclePlayMode()

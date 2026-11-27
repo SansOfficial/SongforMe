@@ -17,8 +17,8 @@ targets:
       path: Mac/Info.plist
       properties:
         CFBundleDisplayName: SongforMe
-        CFBundleShortVersionString: "1.7"
-        CFBundleVersion: "8"
+        CFBundleShortVersionString: "1.8"
+        CFBundleVersion: "9"
         CFBundleDevelopmentRegion: zh-Hans
         LSApplicationCategoryType: public.app-category.music
         LSMinimumSystemVersion: "15.0"
@@ -26,6 +26,12 @@ targets:
         # 音源可以连用户自己填的、局域网里的服务器
         NSAppTransportSecurity: { NSAllowsLocalNetworking: true }
         NSLocalNetworkUsageDescription: 连接你填写的音乐服务器
+        # 本地音乐放在这些地方时，系统会先问一下
+        NSDocumentsFolderUsageDescription: 播放你添加的文件夹里的音乐
+        NSDownloadsFolderUsageDescription: 播放你添加的文件夹里的音乐
+        NSDesktopFolderUsageDescription: 播放你添加的文件夹里的音乐
+        NSRemovableVolumesUsageDescription: 播放移动硬盘里你添加的文件夹中的音乐
+        NSNetworkVolumesUsageDescription: 播放网络磁盘里你添加的文件夹中的音乐
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sansofficial.songforme

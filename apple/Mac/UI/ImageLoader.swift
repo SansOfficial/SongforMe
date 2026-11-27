@@ -32,6 +32,11 @@ final class ImageLoader {
         if let hit = memory.object(forKey: k as NSString) { return hit }
         if let task = running[k] { return await task.value }
         let task = Task { () -> NSImage? in
+            // 本地音乐的封面是磁盘上的文件
+            if url.isFileURL {
+                guard let data = await Self.read(url) else { return nil }
+                return await Self.decode(data, pixels)
+            }
             guard let (data, response) = try? await http.data(from: url), (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             return await Self.decode(data, pixels)
         }
@@ -41,6 +46,9 @@ final class ImageLoader {
         if let image { memory.setObject(image, forKey: k as NSString, cost: Int(image.size.width * image.size.height) * 4) }
         return image
     }
+
+    @concurrent
+    private nonisolated static func read(_ file: URL) async -> Data? { try? Data(contentsOf: file) }
 
     /// 按要显示的大小解码，不在主线程上做
     @concurrent

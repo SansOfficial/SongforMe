@@ -98,7 +98,7 @@ struct RecoPage: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        let seeded = !app.likedMids.isEmpty && !app.hub.all.isEmpty
+        let seeded = !app.likedMids.isEmpty && app.hasMusic
         PageHead(title: "为你推荐", covers: covers(of: app.batch.map(\.song))) {
             if seeded {
                 if !app.batch.isEmpty { PlayButton { app.playBatch() } }
@@ -111,7 +111,7 @@ struct RecoPage: View {
             EmptyView()
         } else if !seeded {
             VStack(spacing: 14) {
-                if app.hub.all.isEmpty {
+                if !app.hasMusic {
                     NoSource()
                 } else {
                     Text("先让它认识你的口味").font(.title3.bold())
@@ -121,6 +121,9 @@ struct RecoPage: View {
                         Text("搜几首喜欢的歌点上红心，就能开始推荐了。").foregroundStyle(.secondary)
                     }
                     if !app.loggedIn { LoginButtons() }
+                    if app.localFolders.isEmpty {
+                        Button("或者添加本地音乐文件夹…") { app.chooseLocalFolder() }.buttonStyle(.link)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 260)
@@ -294,10 +297,14 @@ private struct NoSource: View {
     @Environment(AppModel.self) private var app
     var body: some View {
         VStack(spacing: 14) {
-            Text("还没有音源").font(.title3.bold())
-            Text("SongforMe 本身不带音源。添加一个社区插件，就能在这里听歌了。").foregroundStyle(.secondary)
-            Button("添加插件…") { app.adding = true }
-                .primaryButton()
+            Text("还没有音乐").font(.title3.bold())
+            Text("选一个放着 mp3、flac 的文件夹就能听本地音乐；想听在线的，可以添加一个社区插件。").foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button("添加音乐文件夹…") { app.chooseLocalFolder() }
+                    .primaryButton()
+                Button("添加插件…") { app.adding = true }
+                    .secondaryButton()
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -337,7 +344,7 @@ struct SearchPageView: View {
         }
         let needsLogin = app.hub.named(source).map { $0.searchNeedsLogin && !app.loggedIn($0) } ?? false
         let empty = needsLogin ? "搜索需要先登录\(app.hub.named(source)?.info.spaced ?? "")" : "没有找到和“\(query)”有关的\(title(kind))"
-        if app.hub.all.isEmpty {
+        if !app.hasMusic {
             NoSource().frame(minHeight: 260)
         } else if kind == .song {
             SongList(empty: empty)

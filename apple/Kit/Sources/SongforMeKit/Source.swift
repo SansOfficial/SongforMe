@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-// 音源：歌从哪里来。应用本身不带任何音源，可以在应用里添加插件（见 ScriptSource），
+// 音源：歌从哪里来。应用自带的只有本地音乐（见 LocalSource），在线的可以在应用里添加插件（见 ScriptSource），
 // 也可以编译时把音源的代码放进 local/sources（写法见 README 的“用 Swift 写”）。
 
 public struct SourceInfo: Hashable, Sendable {

@@ -211,6 +211,7 @@ private struct SideControls: View {
                     AddToPlaylistPanel(song: item.song) { adding = false }.environment(app)
                 }
             }
+            SleepButton()
             VolumeButton()
             Button { desktop.toggle() } label: {
                 Text("词").font(.system(size: 13, weight: .semibold)).frame(width: 28, height: 28).contentShape(.circle)
@@ -227,6 +228,49 @@ private struct SideControls: View {
                 IconButton(icon: "lock.fill", label: "解锁桌面歌词", size: 12) { desktop.locked = false }
             }
         }
+    }
+}
+
+/// 睡眠定时。定了时间时月亮亮起来，旁边显示还剩多久
+struct SleepButton: View {
+    private var timer: SleepTimer { .shared }
+
+    var body: some View {
+        Menu {
+            SleepMenu()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: timer.active ? "moon.zzz.fill" : "moon.zzz").font(.system(size: 13, weight: .medium))
+                if timer.end != nil {
+                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                        Text(timer.remaining(at: ctx.date) ?? "").font(.system(size: 11, weight: .medium).monospacedDigit())
+                    }
+                }
+            }
+            .padding(.horizontal, timer.end != nil ? 6 : 0)
+            .frame(minWidth: 28, minHeight: 28)
+            .contentShape(.capsule)
+        }
+        .menuStyle(.button)
+        .buttonStyle(IconButtonStyle(active: timer.active))
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(timer.afterSong ? "睡眠定时：放完这首后停" : timer.end != nil ? "睡眠定时：到点暂停" : "睡眠定时")
+        .accessibilityLabel("睡眠定时")
+    }
+}
+
+/// 播放栏和菜单栏共用的睡眠定时选项
+struct SleepMenu: View {
+    private var timer: SleepTimer { .shared }
+
+    var body: some View {
+        ForEach(SleepTimer.choices, id: \.self) { m in
+            Toggle("\(m) 分钟后", isOn: Binding { timer.minutes == m } set: { _ in timer.set(minutes: m) })
+        }
+        Toggle("放完这首后停", isOn: Binding { timer.afterSong } set: { _ in timer.stopAfterSong() })
+        Divider()
+        Button("关闭定时") { timer.cancel() }.disabled(!timer.active)
     }
 }
 
@@ -263,6 +307,9 @@ struct QueueButton: View {
         IconButton(icon: "list.bullet", label: "播放队列", size: size) { open = true }
             .disabled(app.player.queue.isEmpty)
             .popover(isPresented: $open, arrowEdge: .top) { QueuePanel().environment(app) }
+            #if DEBUG
+            .onReceive(NotificationCenter.default.publisher(for: .debugQueue)) { _ in open.toggle() }
+            #endif
     }
 }
 
@@ -276,22 +323,25 @@ private struct QueuePanel: View {
                 Text("播放队列").font(.headline)
                 Spacer()
                 Text("\(player.queue.count) 首").foregroundStyle(.secondary)
+                    .help("拖动还没放的歌可以调整顺序")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             // 打开时和切歌后，让正在放的那首留在最上面
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(player.queue.enumerated()), id: \.element.id) { i, item in
-                            QueueRow(item: item, current: i == player.index, past: i < player.index) {
-                                if i == player.index { player.toggle() } else { player.playAt(i) }
-                            }
-                        }
+                List {
+                    ForEach(Array(player.queue.prefix(player.index + 1).enumerated()), id: \.element.id) { i, item in
+                        row(i, item)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
+                    // 还没放的可以拖动调整顺序
+                    ForEach(Array(player.queue.dropFirst(player.index + 1).enumerated()), id: \.element.id) { k, item in
+                        row(player.index + 1 + k, item)
+                    }
+                    .onMove { player.moveUpcoming(fromOffsets: $0, toOffset: $1) }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .padding(.bottom, 8)
                 .onAppear { if let id = player.current?.id { proxy.scrollTo(id, anchor: .top) } }
                 .onChange(of: player.current?.id) { _, id in
                     if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
@@ -299,6 +349,31 @@ private struct QueuePanel: View {
             }
         }
         .frame(width: 340, height: 440)
+    }
+
+    private func row(_ i: Int, _ item: QueueItem) -> some View {
+        let player = app.player
+        return QueueRow(item: item, current: i == player.index, past: i < player.index) {
+            if i == player.index { player.toggle() } else { player.playAt(i) }
+        }
+        .contextMenu {
+            if i > player.index + 1 {
+                Button("下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                    player.moveUpcoming(fromOffsets: [i - player.index - 1], toOffset: 0)
+                }
+            }
+            if i > player.index {
+                Button("移到最后", systemImage: "text.append") {
+                    player.moveUpcoming(fromOffsets: [i - player.index - 1], toOffset: player.queue.count - player.index - 1)
+                }
+            }
+            if i != player.index {
+                Button("从队列移除", systemImage: "xmark") { player.remove(item.song.mid) }
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 }
 

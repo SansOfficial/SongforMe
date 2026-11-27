@@ -130,6 +130,12 @@ final class AppModel {
 
     let player: Player
     let lyrics: LyricsModel
+    /// 本地音乐文件夹，公版也带着
+    @ObservationIgnored let local: LocalSource
+    /// 加了哪些本地文件夹（界面从这里读）
+    private(set) var localFolders: [String] = []
+    /// 正在扫描本地文件夹
+    private(set) var scanning = false
     /// 有哪些音源。界面从这里读，增减之后会跟着刷新
     var hub: SourceHub {
         _ = sourceChanges
@@ -162,7 +168,10 @@ final class AppModel {
 
     private init() {
         let hub = SourcePack.installed()
+        let local = LocalSource(covers: Self.folder.appending(path: "covers", directoryHint: .isDirectory))
+        hub.add(local)
         SourceHub.current = hub
+        self.local = local
         let store = Self.openStore()
         sources = hub
         self.store = store
@@ -199,6 +208,7 @@ final class AppModel {
             }
         }
         player.onPrefs = { prefs in Task { try? await store.set("playback", prefs) } }
+        player.onStopped = { SleepTimer.shared.stoppedAfterSong() }
     }
 
     static var folder: URL {
@@ -250,9 +260,12 @@ final class AppModel {
         sourceChanges += 1
         dropOrphans()
         for source in hub.all { await source.prepare(store) }
+        localFolders = local.folders
         await refreshLibrary()
         await refreshAccounts()
         ready = true
+        // 打开时在后台看一眼本地文件夹有没有新歌
+        if !localFolders.isEmpty { Task { await rescanLocal(quiet: true) } }
         Updater.shared.start()
         if let bad = found.failed.first { say("有插件没有载入，\(bad)", error: true) }
     }
@@ -410,6 +423,59 @@ final class AppModel {
     /// 音源不在了的歌从这批推荐里去掉
     private func dropOrphans() { batch.removeAll { sources.owner(of: $0.song) == nil } }
 
+    // MARK: 本地音乐
+
+    /// 除了本地音乐之外的音源（插件、编译进来的）
+    var onlineSources: [any MusicSource] { hub.all.filter { !($0 is LocalSource) } }
+    /// 有没有地方可以听歌：接了音源，或者加了本地文件夹
+    var hasMusic: Bool { !onlineSources.isEmpty || !localFolders.isEmpty }
+
+    func chooseLocalFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "添加"
+        panel.message = "选一个放着 mp3、flac 等音乐文件的文件夹，里面的子文件夹也会一起找"
+        panel.directoryURL = URL.musicDirectory
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        Task {
+            for url in panel.urls { await local.add(url) }
+            await addedLocal()
+        }
+    }
+
+    func addedLocal() async {
+        localFolders = local.folders
+        await rescanLocal(quiet: false)
+    }
+
+    func removeLocalFolder(_ path: String) async {
+        await local.remove(path)
+        localFolders = local.folders
+        // 歌单跟着文件夹一起去掉；听歌记录留着
+        try? await store.removePlaylist(local.info.wrap("dir:\(path)"))
+        if page == .playlist(local.info.wrap("dir:\(path)")) { go(.reco) }
+        await refreshLibrary()
+        say("已移除「\(URL(filePath: path).lastPathComponent)」，文件本身没有动")
+    }
+
+    /// 重新扫描本地文件夹，把每个文件夹存成一个歌单
+    func rescanLocal(quiet: Bool) async {
+        guard !scanning else { return }
+        scanning = true
+        defer { scanning = false }
+        do {
+            _ = try await library.sync(local) { _ in }
+        } catch {
+            if !quiet { say(describe(error), error: true) }
+            return
+        }
+        await refreshLibrary()
+        if case .playlist = page { await show(page) }
+        if !quiet { say(local.songs.isEmpty ? "没有找到能播放的音乐文件（支持 mp3、flac、m4a、wav、aiff）" : "本地音乐：找到 \(local.songs.count) 首") }
+    }
+
     func sync() async {
         guard loggedIn else { return say("请先登录", error: true) }
         for source in hub.all where loggedIn(source) { await sync(source) }
@@ -484,7 +550,10 @@ final class AppModel {
             if result.items.count(where: { $0.kind == .new }) < wanted, await expand(result.candidateCount == 0 ? 15 : 8) {
                 result = try await produce()
             }
-            if result.items.isEmpty { say("没有符合条件的歌。试试放宽语种限制，或再扩充一次候选池", error: true) }
+            if result.items.isEmpty {
+                // 本地音乐没有“相似歌曲”可找，只能从一周以上没听的歌里挑
+                say(onlineSources.isEmpty ? "本地音乐只会推荐一周以上没听过的歌，现在还没有。接上在线音源后才有新歌推荐" : "没有符合条件的歌。试试放宽语种限制，或再扩充一次候选池", error: true)
+            }
         } catch {
             say(describe(error), error: true)
         }
@@ -694,6 +763,18 @@ final class AppModel {
         if case .playlist(let id) = page { context = id }
         let items = content.songs.map { QueueItem(song: $0, source: source) }
         player.setQueue(items, startIndex: mid.flatMap { m in items.firstIndex { $0.song.mid == m } }, context: context)
+    }
+
+    /// 右键菜单里的“下一首播放”（next）和“加到播放队列”
+    func enqueue(_ song: Song, next: Bool) {
+        if player.current?.song.mid == song.mid { return say("正在放这首") }
+        var source = PlaySource.library
+        if case .search = page { source = .search }
+        if batch.contains(where: { $0.song.mid == song.mid && $0.kind == .new }) { source = .reco }
+        let item = QueueItem(song: song, source: source)
+        let idle = player.current == nil
+        if next { player.playNext([item]) } else { player.enqueue([item]) }
+        if !idle { say(next ? "下一首播放《\(song.name)》" : "已加到播放队列：《\(song.name)》") }
     }
 
     /// 播放 / 暂停；还没播过歌时从这一批推荐开始

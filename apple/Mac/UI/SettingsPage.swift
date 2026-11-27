@@ -247,9 +247,30 @@ private struct SourceSettings: View {
 
     var body: some View {
         let accounts = app.hub.all.filter(\.hasAccount)
+        let online = app.onlineSources
         VStack(alignment: .leading, spacing: 0) {
+            SettingsCard("本地音乐", note: "只读取文件，不会改动、移动或上传。") {
+                ForEach(app.localFolders, id: \.self) { path in
+                    SettingRow(URL(filePath: path).lastPathComponent, (path as NSString).abbreviatingWithTildeInPath, icon: "folder.fill", color: .blue) {
+                        HStack(spacing: 2) {
+                            IconButton(icon: "magnifyingglass", label: "在访达中显示", size: 12) { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: path)]) }
+                            IconButton(icon: "xmark", label: "移除这个文件夹", size: 12) { Task { await app.removeLocalFolder(path) } }
+                        }
+                    }
+                    RowDivider()
+                }
+                SettingRow("添加音乐文件夹", "mp3、flac、m4a、wav、aiff，子文件夹也会一起找", icon: "plus", color: .gray) {
+                    Button("添加…") { app.chooseLocalFolder() }
+                }
+                if !app.localFolders.isEmpty {
+                    RowDivider()
+                    SettingRow("重新扫描", app.scanning ? "正在扫描…" : "\(app.local.songs.count) 首。文件夹里加了歌、改了标签之后点一下", icon: "arrow.clockwise", color: .green) {
+                        Button("扫描") { Task { await app.rescanLocal(quiet: false) } }.disabled(app.scanning)
+                    }
+                }
+            }
             SettingsCard("音源", note: "插件是别人写的程序，只添加你信任的。") {
-                ForEach(Array(app.hub.all.enumerated()), id: \.element.info.id) { i, source in
+                ForEach(Array(online.enumerated()), id: \.element.info.id) { i, source in
                     if i > 0 { RowDivider() }
                     let plugin = source is ScriptSource
                     SettingRow(source.info.name, plugin ? "插件" : "自带", icon: plugin ? "puzzlepiece.extension.fill" : "music.note", color: plugin ? .orange : .green) {
@@ -263,7 +284,7 @@ private struct SourceSettings: View {
                         }
                     }
                 }
-                if !app.hub.all.isEmpty { RowDivider() }
+                if !online.isEmpty { RowDivider() }
                 SettingRow("添加插件", "从文件或链接添加一个音源插件", icon: "plus", color: .gray) {
                     Button("添加…") { app.adding = true }
                 }
